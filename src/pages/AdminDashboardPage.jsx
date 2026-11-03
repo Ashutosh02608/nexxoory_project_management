@@ -29,20 +29,22 @@ import {
 import { useNavigate } from 'react-router-dom';
 
 export default function AdminDashboardPage() {
-  const { projects, tasks, teams, users, announcements, events } = useApp();
+  const { projects = [], tasks = [], teams = [], users = [], announcements = [], events = [] } = useApp() || {};
   const navigate = useNavigate();
 
-  // DERIVED DYNAMIC METRICS FROM REAL DATASETS
+  // DERIVED DYNAMIC METRICS FROM REAL DATASETS (with defensive empty/null checks)
   const totalProjects = projects.length;
   const activeProjects = projects.filter(p => p.status === 'In Progress' || p.status === 'Planning').length;
   const completedProjects = projects.filter(p => p.status === 'Completed').length;
-  const overdueProjects = projects.filter(p => p.status === 'Overdue' || (new Date(p.dueDate) < new Date() && p.status !== 'Completed')).length;
+  const overdueProjects = projects.filter(p => p.status === 'Overdue' || (p.dueDate && new Date(p.dueDate) < new Date() && p.status !== 'Completed')).length;
   const totalEmployees = users.length;
   const activeTeams = teams.length;
 
   // Task Status Distribution Chart Data
   const taskStatusCounts = tasks.reduce((acc, t) => {
-    acc[t.status] = (acc[t.status] || 0) + 1;
+    if (t?.status) {
+      acc[t.status] = (acc[t.status] || 0) + 1;
+    }
     return acc;
   }, {});
 
@@ -64,7 +66,7 @@ export default function AdminDashboardPage() {
   const teamWorkload = teams.map(team => {
     const teamTasks = tasks.filter(t => t.teamId === team.id);
     return {
-      name: team.name.split(' ')[0],
+      name: team.name ? team.name.split(' ')[0] : 'Team',
       tasks: teamTasks.length,
       completed: teamTasks.filter(t => t.status === 'Completed').length
     };
@@ -72,13 +74,12 @@ export default function AdminDashboardPage() {
 
   // Project Completion progress
   const projectHealthData = projects.map(p => ({
-    name: p.name.length > 12 ? p.name.substring(0, 10) + '...' : p.name,
-    progress: p.progress,
-    budgetSpentPercent: Math.round((p.spent / p.budget) * 100)
+    name: (p.name || 'Project').length > 12 ? (p.name || 'Project').substring(0, 10) + '...' : (p.name || 'Project'),
+    progress: Number(p.progress) || 0
   }));
 
   // Overdue Tasks
-  const overdueTasks = tasks.filter(t => t.status !== 'Completed' && new Date(t.dueDate) < new Date());
+  const overdueTasks = tasks.filter(t => t.status !== 'Completed' && t.dueDate && new Date(t.dueDate) < new Date());
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -160,35 +161,52 @@ export default function AdminDashboardPage() {
 
       {/* Main Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Project Health & Budget Progress */}
+        {/* Project Health & Milestone Delivery Progress */}
         <div className="lg:col-span-2 bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="font-semibold text-sm text-[var(--text-main)]">Project Progress vs Budget Utilization</h3>
-              <p className="text-xs text-[var(--text-sec)]">Comparing actual completion percentage with budget drawdown</p>
+              <h3 className="font-semibold text-sm text-[var(--text-main)]">Project Progress & Milestone Tracking</h3>
+              <p className="text-xs text-[var(--text-sec)]">Live completion percentage across all portfolio initiatives</p>
             </div>
             <TrendingUp className="w-4 h-4 text-[#635BFF]" />
           </div>
 
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={projectHealthData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(140, 145, 160, 0.15)" />
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'var(--text-sec)' }} />
-                <YAxis tick={{ fontSize: 11, fill: 'var(--text-sec)' }} domain={[0, 100]} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: 'var(--surface)',
-                    borderColor: 'var(--border)',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                    color: 'var(--text-main)'
-                  }}
-                />
-                <Bar dataKey="progress" name="Progress %" fill="#635BFF" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="budgetSpentPercent" name="Budget Spent %" fill="#E9A23B" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="h-64 w-full flex items-center justify-center">
+            {projectHealthData.length === 0 ? (
+              <div className="text-center text-xs text-[var(--text-sec)]">
+                <p>No project data available</p>
+                <p className="text-[10px] mt-1">Create projects to view progress analytics.</p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={projectHealthData}
+                  margin={{ top: 15, right: 20, left: -20, bottom: 5 }}
+                  barCategoryGap="40%"
+                  barGap={8}
+                >
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(140, 145, 160, 0.15)" />
+                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'var(--text-sec)' }} />
+                  <YAxis tick={{ fontSize: 11, fill: 'var(--text-sec)' }} domain={[0, 100]} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'var(--surface)',
+                      borderColor: 'var(--border)',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      color: 'var(--text-main)'
+                    }}
+                  />
+                  <Bar
+                    dataKey="progress"
+                    name="Progress %"
+                    fill="#635BFF"
+                    maxBarSize={48}
+                    radius={[6, 6, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
 
@@ -200,42 +218,53 @@ export default function AdminDashboardPage() {
           </div>
 
           <div className="h-52 w-full flex items-center justify-center my-2">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={55}
-                  outerRadius={80}
-                  paddingAngle={4}
-                  dataKey="value"
-                >
-                  {pieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={PIE_COLORS[entry.name] || '#635BFF'} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: 'var(--surface)',
-                    borderColor: 'var(--border)',
-                    borderRadius: '8px',
-                    fontSize: '12px'
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+            {pieData.length === 0 ? (
+              <div className="text-center text-xs text-[var(--text-sec)]">
+                <p>No tasks recorded</p>
+                <p className="text-[10px] mt-1">Status pipeline is empty</p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={55}
+                    outerRadius={80}
+                    paddingAngle={4}
+                    dataKey="value"
+                  >
+                    {pieData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={PIE_COLORS[entry.name] || '#635BFF'} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'var(--surface)',
+                      borderColor: 'var(--border)',
+                      borderRadius: '8px',
+                      fontSize: '12px'
+                    }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
           </div>
 
           {/* Legend */}
-          <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-[var(--border)]">
-            {pieData.map(item => (
-              <div key={item.name} className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: PIE_COLORS[item.name] || '#635BFF' }} />
-                <span className="text-[var(--text-sec)] truncate">{item.name}</span>
-                <span className="font-semibold ml-auto text-[var(--text-main)]">{item.value}</span>
-              </div>
-            ))}
+          <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-[var(--border)] min-h-[40px]">
+            {pieData.length === 0 ? (
+              <span className="text-[11px] text-[var(--text-sec)] col-span-2 text-center">0 task categories</span>
+            ) : (
+              pieData.map(item => (
+                <div key={item.name} className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: PIE_COLORS[item.name] || '#635BFF' }} />
+                  <span className="text-[var(--text-sec)] truncate">{item.name}</span>
+                  <span className="font-semibold ml-auto text-[var(--text-main)]">{item.value}</span>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -262,34 +291,42 @@ export default function AdminDashboardPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border)]">
-                {projects.slice(0, 4).map(p => (
-                  <tr key={p.id} className="hover:bg-[var(--bg-main)] transition-colors">
-                    <td className="py-3 font-semibold text-[var(--text-main)] max-w-xs truncate pr-4">
-                      {p.name}
-                    </td>
-                    <td className="py-3 pr-4">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${
-                        p.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' :
-                        p.status === 'In Progress' ? 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20' :
-                        p.status === 'Overdue' ? 'bg-rose-500/10 text-rose-600 border-rose-500/20' :
-                        'bg-amber-500/10 text-amber-600 border-amber-500/20'
-                      }`}>
-                        {p.status}
-                      </span>
-                    </td>
-                    <td className="py-3 pr-4 w-36">
-                      <div className="flex items-center gap-2">
-                        <div className="w-full bg-[var(--border)] h-1.5 rounded-full overflow-hidden">
-                          <div className="bg-[#635BFF] h-full rounded-full" style={{ width: `${p.progress}%` }} />
-                        </div>
-                        <span className="text-[10px] font-semibold text-[var(--text-sec)]">{p.progress}%</span>
-                      </div>
-                    </td>
-                    <td className="py-3 text-[var(--text-sec)]">
-                      {p.dueDate}
+                {projects.length === 0 ? (
+                  <tr>
+                    <td colSpan="4" className="py-6 text-center text-[var(--text-sec)]">
+                      No projects available. Create your first project to begin tracking.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  projects.slice(0, 4).map(p => (
+                    <tr key={p.id} className="hover:bg-[var(--bg-main)] transition-colors">
+                      <td className="py-3 font-semibold text-[var(--text-main)] max-w-xs truncate pr-4">
+                        {p.name}
+                      </td>
+                      <td className="py-3 pr-4">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                          p.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' :
+                          p.status === 'In Progress' ? 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20' :
+                          p.status === 'Overdue' ? 'bg-rose-500/10 text-rose-600 border-rose-500/20' :
+                          'bg-amber-500/10 text-amber-600 border-amber-500/20'
+                        }`}>
+                          {p.status}
+                        </span>
+                      </td>
+                      <td className="py-3 pr-4 w-36">
+                        <div className="flex items-center gap-2">
+                          <div className="w-full bg-[var(--border)] h-1.5 rounded-full overflow-hidden">
+                            <div className="bg-[#635BFF] h-full rounded-full" style={{ width: `${p.progress}%` }} />
+                          </div>
+                          <span className="text-[10px] font-semibold text-[var(--text-sec)]">{p.progress}%</span>
+                        </div>
+                      </td>
+                      <td className="py-3 text-[var(--text-sec)]">
+                        {p.dueDate}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -321,20 +358,24 @@ export default function AdminDashboardPage() {
           {/* Announcements */}
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-xs">
             <h3 className="font-semibold text-sm text-[var(--text-main)] mb-3">Company Announcements</h3>
-            <div className="space-y-3">
-              {announcements.map(ann => (
-                <div key={ann.id} className="p-3 rounded-xl bg-[var(--bg-main)] border border-[var(--border)]">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#635BFF]/10 text-[#635BFF]">
-                      {ann.tag}
-                    </span>
-                    <span className="text-[10px] text-[var(--text-sec)]">{ann.date}</span>
+            {announcements.length === 0 ? (
+              <p className="text-xs text-[var(--text-sec)] py-2">No recent announcements posted.</p>
+            ) : (
+              <div className="space-y-3">
+                {announcements.map(ann => (
+                  <div key={ann.id} className="p-3 rounded-xl bg-[var(--bg-main)] border border-[var(--border)]">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#635BFF]/10 text-[#635BFF]">
+                        {ann.tag}
+                      </span>
+                      <span className="text-[10px] text-[var(--text-sec)]">{ann.date}</span>
+                    </div>
+                    <h4 className="text-xs font-bold text-[var(--text-main)]">{ann.title}</h4>
+                    <p className="text-[11px] text-[var(--text-sec)] mt-1">{ann.content}</p>
                   </div>
-                  <h4 className="text-xs font-bold text-[var(--text-main)]">{ann.title}</h4>
-                  <p className="text-[11px] text-[var(--text-sec)] mt-1">{ann.content}</p>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

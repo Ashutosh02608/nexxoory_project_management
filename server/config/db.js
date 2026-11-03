@@ -66,8 +66,11 @@ export function getDbPool() {
       connectionString,
       ssl,
       max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
+      min: 2,
+      idleTimeoutMillis: 120000,
+      connectionTimeoutMillis: 10000,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
     });
 
     pool.on('error', (err) => {
@@ -92,8 +95,9 @@ export async function query(text, params = []) {
   try {
     const res = await p.query(text, params);
     const duration = Date.now() - start;
-    if (process.env.NODE_ENV === 'development' && duration > 500) {
-      console.warn(`[SLOW QUERY DETECTED] Duration: ${duration}ms`);
+    if (process.env.NODE_ENV === 'development' && duration > 2000) {
+      const preview = text.replace(/\s+/g, ' ').trim().slice(0, 100);
+      console.warn(`[SLOW QUERY DETECTED] Duration: ${duration}ms | Query: "${preview}..."`);
     }
     return res;
   } catch (error) {

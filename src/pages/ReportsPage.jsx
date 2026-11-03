@@ -21,9 +21,9 @@ export default function ReportsPage() {
 
   // Export CSV simulation using actual mock state
   const handleExportCSV = () => {
-    const headers = 'ID,Name,Status,Priority,Progress,Budget,DueDate\n';
+    const headers = 'ID,Name,Status,Priority,Progress,DueDate\n';
     const rows = projects.map(p =>
-      `"${p.id}","${p.name}","${p.status}","${p.priority}",${p.progress},${p.budget},"${p.dueDate}"`
+      `"${p.id}","${p.name}","${p.status}","${p.priority}",${p.progress},"${p.dueDate}"`
     ).join('\n');
 
     const blob = new Blob([headers + rows], { type: 'text/csv' });
@@ -91,35 +91,45 @@ export default function ReportsPage() {
           </div>
         </div>
 
-        {/* Budget vs Allocation Table */}
+        {/* Project Health & Milestone Delivery Status */}
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-xs">
-          <h3 className="font-bold text-sm text-[var(--text-main)] mb-1">Financial Allocation & Burn</h3>
-          <p className="text-xs text-[var(--text-sec)] mb-4">Capital drawdown against planned project budgets</p>
+          <h3 className="font-bold text-sm text-[var(--text-main)] mb-1">Portfolio Delivery & Milestone Health</h3>
+          <p className="text-xs text-[var(--text-sec)] mb-4">Milestone progress across current strategic initiatives</p>
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
                 <tr className="border-b border-[var(--border)] text-[var(--text-sec)] uppercase font-semibold text-[10px]">
                   <th className="pb-2">Project</th>
-                  <th className="pb-2">Budget</th>
-                  <th className="pb-2">Utilized</th>
-                  <th className="pb-2 text-right">Variance</th>
+                  <th className="pb-2">Status</th>
+                  <th className="pb-2">Priority</th>
+                  <th className="pb-2">Progress</th>
+                  <th className="pb-2 text-right">Due Date</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border)]">
-                {projects.map(p => {
-                  const variance = p.budget - (p.spent || 0);
-                  return (
-                    <tr key={p.id}>
-                      <td className="py-2.5 font-semibold text-[var(--text-main)]">{p.name}</td>
-                      <td className="py-2.5">${p.budget?.toLocaleString()}</td>
-                      <td className="py-2.5">${(p.spent || 0).toLocaleString()}</td>
-                      <td className={`py-2.5 text-right font-bold ${variance < 0 ? 'text-[#E05252]' : 'text-[#16A36A]'}`}>
-                        ${variance.toLocaleString()}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {projects.map(p => (
+                  <tr key={p.id}>
+                    <td className="py-2.5 font-semibold text-[var(--text-main)]">{p.name}</td>
+                    <td className="py-2.5">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] bg-[var(--bg-main)] border border-[var(--border)] text-[var(--text-sec)]">
+                        {p.status}
+                      </span>
+                    </td>
+                    <td className="py-2.5">{p.priority}</td>
+                    <td className="py-2.5 w-32">
+                      <div className="flex items-center gap-2">
+                        <div className="w-full bg-[var(--border)] h-1.5 rounded-full overflow-hidden">
+                          <div className="bg-[#635BFF] h-full rounded-full" style={{ width: `${p.progress}%` }} />
+                        </div>
+                        <span className="text-[10px] text-[var(--text-sec)]">{p.progress}%</span>
+                      </div>
+                    </td>
+                    <td className="py-2.5 text-right font-medium text-[var(--text-sec)]">
+                      {p.dueDate}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

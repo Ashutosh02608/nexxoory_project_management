@@ -13,7 +13,9 @@
     "argon2": "^0.45.2",
     "autoprefixer": "^10.6.2",
     "clsx": "^2.1.1",
+    "cookie": "^2.0.1",
     "dotenv": "^18.0.9",
+    "jsonwebtoken": "^9.0.3",
     "lucide-react": "^1.66.0",
     "pg": "^8.23.1",
     "postcss": "^8.5.32",
@@ -21,7 +23,8 @@
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.5",
     "recharts": "^3.10.1",
-    "tailwindcss": "^4.3.4"
+    "tailwindcss": "^4.3.4",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.4",

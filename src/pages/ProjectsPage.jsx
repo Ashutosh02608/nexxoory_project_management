@@ -14,9 +14,11 @@ import {
   Trash2,
   Edit2,
   Eye,
-  X
+  X,
+  Loader2
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { getInitials } from '../utils/avatar';
 
 export default function ProjectsPage() {
   const { projects, updateProject, removeProject, users, teams, permissions } = useApp();
@@ -30,6 +32,8 @@ export default function ProjectsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
   const [detailsProject, setDetailsProject] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   // Form state
   const [formData, setFormData] = useState({
@@ -42,12 +46,12 @@ export default function ProjectsPage() {
     startDate: '',
     dueDate: '',
     progress: 0,
-    budget: 50000,
     tags: 'Frontend, React'
   });
 
   const openCreateModal = () => {
     setEditingProject(null);
+    setSubmitError('');
     setFormData({
       name: '',
       description: '',
@@ -58,7 +62,6 @@ export default function ProjectsPage() {
       startDate: new Date().toISOString().split('T')[0],
       dueDate: '2026-12-31',
       progress: 0,
-      budget: 50000,
       tags: 'Frontend, Design'
     });
     setModalOpen(true);
@@ -66,6 +69,7 @@ export default function ProjectsPage() {
 
   const openEditModal = (p) => {
     setEditingProject(p);
+    setSubmitError('');
     setFormData({
       ...p,
       tags: Array.isArray(p.tags) ? p.tags.join(', ') : p.tags || ''
@@ -73,19 +77,27 @@ export default function ProjectsPage() {
     setModalOpen(true);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    const payload = {
-      ...formData,
-      id: editingProject ? editingProject.id : undefined,
-      budget: Number(formData.budget) || 0,
-      progress: Number(formData.progress) || 0,
-      spent: editingProject ? editingProject.spent : 0,
-      tags: typeof formData.tags === 'string' ? formData.tags.split(',').map(s => s.trim()).filter(Boolean) : formData.tags
-    };
+    setIsSubmitting(true);
+    setSubmitError('');
+    try {
+      const payload = {
+        ...formData,
+        id: editingProject ? editingProject.id : undefined,
+        budget: 0,
+        progress: Number(formData.progress) || 0,
+        spent: 0,
+        tags: typeof formData.tags === 'string' ? formData.tags.split(',').map(s => s.trim()).filter(Boolean) : formData.tags
+      };
 
-    updateProject(payload);
-    setModalOpen(false);
+      await updateProject(payload);
+      setModalOpen(false);
+    } catch (err) {
+      setSubmitError(err.message || 'Failed to save project');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Filtered projects
@@ -104,7 +116,7 @@ export default function ProjectsPage() {
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-main)] tracking-tight">Project Portfolio</h1>
           <p className="text-xs sm:text-sm text-[var(--text-sec)] mt-0.5">
-            Organize, monitor milestones, allocate teams, and control budget drawdown.
+            Organize, monitor milestones, allocate teams, and track delivery deadlines.
           </p>
         </div>
 
@@ -186,7 +198,23 @@ export default function ProjectsPage() {
 
       {/* Grid View */}
       {viewMode === 'grid' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        filtered.length === 0 ? (
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-12 text-center">
+            <FolderKanban className="w-10 h-10 text-[var(--text-sec)] mx-auto mb-3 opacity-40" />
+            <h3 className="font-bold text-sm text-[var(--text-main)]">No projects found</h3>
+            <p className="text-xs text-[var(--text-sec)] mt-1 mb-4">Get started by creating your first enterprise project.</p>
+            {permissions.canCreateProject && (
+              <button
+                onClick={openCreateModal}
+                className="inline-flex items-center gap-2 bg-[#635BFF] hover:bg-[#4942D9] text-white text-xs font-semibold px-4 py-2 rounded-xl transition-colors cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Create Project</span>
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filtered.map(p => {
             const manager = users.find(u => u.id === p.managerId);
             const team = teams.find(t => t.id === p.teamId);
@@ -229,7 +257,7 @@ export default function ProjectsPage() {
                   {/* Meta details */}
                   <div className="mt-4 pt-4 border-t border-[var(--border)] flex items-center justify-between text-xs text-[var(--text-sec)]">
                     <span>Due: {p.dueDate}</span>
-                    <span className="font-semibold text-[var(--text-main)]">${(p.budget || 0).toLocaleString()}</span>
+                    <span className="font-semibold text-[#635BFF]">{p.priority} Priority</span>
                   </div>
                 </div>
 
@@ -237,12 +265,12 @@ export default function ProjectsPage() {
                 <div className="mt-4 pt-3 border-t border-[var(--border)] flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     {manager && (
-                      <img
-                        src={manager.avatar}
-                        alt={manager.name}
+                      <div
                         title={`Manager: ${manager.name}`}
-                        className="w-6 h-6 rounded-full object-cover border border-[#635BFF]"
-                      />
+                        className="w-6 h-6 rounded-full bg-[#1E6091] text-white text-[10px] font-bold flex items-center justify-center shrink-0 border border-[#1E6091] tracking-wider"
+                      >
+                        {getInitials(manager.name)}
+                      </div>
                     )}
                     <span className="text-[11px] text-[var(--text-sec)] truncate max-w-[120px]">
                       {team ? team.name : 'Unassigned'}
@@ -283,6 +311,7 @@ export default function ProjectsPage() {
             );
           })}
         </div>
+        )
       )}
 
       {/* List / Table View */}
@@ -296,7 +325,6 @@ export default function ProjectsPage() {
                   <th className="py-3 px-4">Status</th>
                   <th className="py-3 px-4">Priority</th>
                   <th className="py-3 px-4">Progress</th>
-                  <th className="py-3 px-4">Budget</th>
                   <th className="py-3 px-4">Due Date</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
@@ -324,9 +352,6 @@ export default function ProjectsPage() {
                         </div>
                         <span className="text-[10px] font-semibold text-[var(--text-sec)]">{p.progress}%</span>
                       </div>
-                    </td>
-                    <td className="py-3 px-4 font-medium text-[var(--text-main)]">
-                      ${(p.budget || 0).toLocaleString()}
                     </td>
                     <td className="py-3 px-4 text-[var(--text-sec)]">{p.dueDate}</td>
                     <td className="py-3 px-4 text-right">
@@ -470,15 +495,6 @@ export default function ProjectsPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Budget ($)</label>
-                  <input
-                    type="number"
-                    value={formData.budget}
-                    onChange={(e) => setFormData({ ...formData, budget: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
-                  />
-                </div>
-                <div>
                   <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Due Date</label>
                   <input
                     type="date"
@@ -492,16 +508,25 @@ export default function ProjectsPage() {
               <div className="pt-3 border-t border-[var(--border)] flex justify-end gap-2">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setModalOpen(false)}
-                  className="px-4 py-2 text-xs text-[var(--text-sec)] hover:bg-[var(--bg-main)] rounded-lg cursor-pointer"
+                  className="px-4 py-2 text-xs text-[var(--text-sec)] hover:bg-[var(--bg-main)] rounded-lg cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs bg-[#635BFF] hover:bg-[#4942D9] text-white font-semibold rounded-lg shadow-xs cursor-pointer"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 text-xs bg-[#635BFF] hover:bg-[#4942D9] text-white font-semibold rounded-lg shadow-xs cursor-pointer disabled:opacity-70 flex items-center gap-2"
                 >
-                  Save Project
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>Save Project</span>
+                  )}
                 </button>
               </div>
             </form>
@@ -529,7 +554,7 @@ export default function ProjectsPage() {
                 <p className="text-xs text-[var(--text-main)] mt-1">{detailsProject.description}</p>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-3 border-y border-[var(--border)] text-xs">
+              <div className="grid grid-cols-3 gap-3 py-3 border-y border-[var(--border)] text-xs">
                 <div>
                   <span className="text-[var(--text-sec)] block text-[10px]">Status</span>
                   <span className="font-semibold text-[var(--text-main)]">{detailsProject.status}</span>
@@ -541,10 +566,6 @@ export default function ProjectsPage() {
                 <div>
                   <span className="text-[var(--text-sec)] block text-[10px]">Progress</span>
                   <span className="font-semibold text-[#635BFF]">{detailsProject.progress}%</span>
-                </div>
-                <div>
-                  <span className="text-[var(--text-sec)] block text-[10px]">Budget</span>
-                  <span className="font-semibold text-[var(--text-main)]">${(detailsProject.budget || 0).toLocaleString()}</span>
                 </div>
               </div>
 

@@ -14,9 +14,11 @@ import {
   Layers,
   ChevronDown,
   X,
-  MessageSquare
+  MessageSquare,
+  Loader2
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { getInitials } from '../utils/avatar';
 
 const COLUMNS = [
   { id: 'Backlog', label: 'Backlog', color: '#9AA0B2' },
@@ -40,8 +42,15 @@ export default function TasksPage() {
   const [editingTask, setEditingTask] = useState(null);
   const [activeTaskDrawer, setActiveTaskDrawer] = useState(null);
   const [commentInput, setCommentInput] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
-  // Form state
+  // Form state & Flexible Assignment Mode ('employee', 'team', 'member')
+  const [assignmentMode, setAssignmentMode] = useState('employee');
+  const [employeeSearch, setEmployeeSearch] = useState('');
+  const [teamSearch, setTeamSearch] = useState('');
+  const [selectedTeamForMember, setSelectedTeamForMember] = useState('');
+
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -58,12 +67,22 @@ export default function TasksPage() {
 
   const openCreateModal = () => {
     setEditingTask(null);
+    setSubmitError('');
+    setEmployeeSearch('');
+    setTeamSearch('');
+    setAssignmentMode('employee');
+    
+    // Default project respecting PM permissions
+    const defaultProject = currentUser?.role === 'project_manager'
+      ? projects.find(p => p.managerId === currentUser.id) || projects[0]
+      : projects[0];
+
     setFormData({
       title: '',
       description: '',
-      projectId: projects[0]?.id || '',
+      projectId: defaultProject?.id || '',
       assigneeId: users[0]?.id || '',
-      teamId: teams[0]?.id || '',
+      teamId: '',
       priority: 'Medium',
       status: 'To Do',
       startDate: new Date().toISOString().split('T')[0],
@@ -76,6 +95,19 @@ export default function TasksPage() {
 
   const openEditModal = (t) => {
     setEditingTask(t);
+    setSubmitError('');
+    setEmployeeSearch('');
+    setTeamSearch('');
+
+    if (t.teamId && t.assigneeId) {
+      setAssignmentMode('member');
+      setSelectedTeamForMember(t.teamId);
+    } else if (t.teamId && !t.assigneeId) {
+      setAssignmentMode('team');
+    } else {
+      setAssignmentMode('employee');
+    }
+
     setFormData({
       ...t,
       labels: Array.isArray(t.labels) ? t.labels.join(', ') : t.labels || ''
@@ -83,18 +115,26 @@ export default function TasksPage() {
     setModalOpen(true);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    const payload = {
-      ...formData,
-      id: editingTask ? editingTask.id : undefined,
-      progress: Number(formData.progress) || 0,
-      labels: typeof formData.labels === 'string' ? formData.labels.split(',').map(s => s.trim()).filter(Boolean) : formData.labels,
-      subtasks: editingTask ? editingTask.subtasks : [],
-      comments: editingTask ? editingTask.comments : []
-    };
-    updateTask(payload);
-    setModalOpen(false);
+    setIsSubmitting(true);
+    setSubmitError('');
+    try {
+      const payload = {
+        ...formData,
+        id: editingTask ? editingTask.id : undefined,
+        progress: Number(formData.progress) || 0,
+        labels: typeof formData.labels === 'string' ? formData.labels.split(',').map(s => s.trim()).filter(Boolean) : formData.labels,
+        subtasks: editingTask ? editingTask.subtasks : [],
+        comments: editingTask ? editingTask.comments : []
+      };
+      await updateTask(payload);
+      setModalOpen(false);
+    } catch (err) {
+      setSubmitError(err.message || 'Failed to save task');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Drag and drop handlers for Kanban columns
@@ -161,7 +201,11 @@ export default function TasksPage() {
   const filteredTasks = tasks.filter(t => {
     const matchesSearch = t.title.toLowerCase().includes(search.toLowerCase()) ||
       (t.description && t.description.toLowerCase().includes(search.toLowerCase()));
-    const matchesProject = projectFilter === 'ALL' || t.projectId === projectFilter;
+    const matchesProject = projectFilter === 'ALL'
+      ? true
+      : projectFilter === 'UNPLANNED'
+        ? !t.projectId
+        : t.projectId === projectFilter;
     const matchesPriority = priorityFilter === 'ALL' || t.priority === priorityFilter;
     return matchesSearch && matchesProject && matchesPriority;
   });
@@ -177,13 +221,20 @@ export default function TasksPage() {
           </p>
         </div>
 
-        <button
-          onClick={openCreateModal}
-          className="flex items-center gap-2 bg-[#635BFF] hover:bg-[#4942D9] text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-xs transition-colors cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          <span>New Task</span>
-        </button>
+        {/* Team Member Role restriction notice */}
+        {permissions.isTeamMember ? (
+          <div className="text-xs text-[var(--text-sec)] bg-[var(--bg-main)] px-3 py-1.5 rounded-xl border border-[var(--border)]">
+            Viewing workspace tasks
+          </div>
+        ) : (
+          <button
+            onClick={openCreateModal}
+            className="flex items-center gap-2 bg-[#635BFF] hover:bg-[#4942D9] text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-xs transition-colors cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>New Task</span>
+          </button>
+        )}
       </div>
 
       {/* Control Bar: Filters, Search, View Mode */}
@@ -207,6 +258,7 @@ export default function TasksPage() {
             className="text-xs px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
           >
             <option value="ALL">All Projects</option>
+            <option value="UNPLANNED">Unplanned Tasks</option>
             {projects.map(p => (
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
@@ -268,7 +320,12 @@ export default function TasksPage() {
 
                 {/* Task Cards Column */}
                 <div className="p-2 space-y-2.5 overflow-y-auto flex-1">
-                  {columnTasks.map(task => {
+                  {columnTasks.length === 0 ? (
+                    <div className="py-8 text-center text-[11px] text-[var(--text-sec)]">
+                      No tasks in {col.label}
+                    </div>
+                  ) : (
+                    columnTasks.map(task => {
                     const assignee = users.find(u => u.id === task.assigneeId);
                     return (
                       <div
@@ -306,7 +363,9 @@ export default function TasksPage() {
                         <div className="flex items-center justify-between pt-1 border-t border-[var(--border)] text-[10px] text-[var(--text-sec)]">
                           <div className="flex items-center gap-1.5">
                             {assignee ? (
-                              <img src={assignee.avatar} alt={assignee.name} className="w-5 h-5 rounded-full object-cover" />
+                              <div className="w-5 h-5 rounded-full bg-[#1E6091] text-white text-[9px] font-bold flex items-center justify-center shrink-0 tracking-wider">
+                                {getInitials(assignee.name)}
+                              </div>
                             ) : (
                               <User className="w-4 h-4" />
                             )}
@@ -322,7 +381,8 @@ export default function TasksPage() {
                         </div>
                       </div>
                     );
-                  })}
+                  })
+                )}
                 </div>
               </div>
             );
@@ -346,7 +406,14 @@ export default function TasksPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
-              {filteredTasks.map(t => {
+              {filteredTasks.length === 0 ? (
+                <tr>
+                  <td colSpan="6" className="py-8 text-center text-xs text-[var(--text-sec)]">
+                    No tasks found matching current filters.
+                  </td>
+                </tr>
+              ) : (
+                filteredTasks.map(t => {
                 const assignee = users.find(u => u.id === t.assigneeId);
                 return (
                   <tr key={t.id} className="hover:bg-[var(--bg-main)] transition-colors">
@@ -363,7 +430,11 @@ export default function TasksPage() {
                     <td className="py-3 px-4 font-medium text-[11px]">{t.priority}</td>
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-2">
-                        {assignee && <img src={assignee.avatar} alt={assignee.name} className="w-5 h-5 rounded-full object-cover" />}
+                        {assignee && (
+                          <div className="w-5 h-5 rounded-full bg-[#1E6091] text-white text-[9px] font-bold flex items-center justify-center shrink-0 tracking-wider">
+                            {getInitials(assignee.name)}
+                          </div>
+                        )}
                         <span>{assignee?.name || 'Unassigned'}</span>
                       </div>
                     </td>
@@ -393,7 +464,8 @@ export default function TasksPage() {
                     </td>
                   </tr>
                 );
-              })}
+              })
+            )}
             </tbody>
           </table>
         </div>
@@ -552,27 +624,202 @@ export default function TasksPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Project</label>
-                  <select
-                    value={formData.projectId}
-                    onChange={(e) => setFormData({ ...formData, projectId: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
+              {/* Project Selection (RBAC scoped for PM) */}
+              <div>
+                <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Associated Project</label>
+                <select
+                  value={formData.projectId}
+                  onChange={(e) => setFormData({ ...formData, projectId: e.target.value })}
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
+                >
+                  <option value="">None (Unplanned / Ad-hoc Task)</option>
+                  {projects
+                    .filter(p => currentUser?.role === 'admin' || p.managerId === currentUser?.id)
+                    .map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                </select>
+              </div>
+
+              {/* FLEXIBLE TASK ASSIGNMENT SELECTOR */}
+              <div className="border border-[var(--border)] bg-[var(--bg-main)]/50 p-3.5 rounded-xl space-y-3">
+                <label className="block text-xs font-bold text-[var(--text-main)]">Task Assignment Mode</label>
+                
+                {/* Mode Switcher Tabs */}
+                <div className="grid grid-cols-3 gap-1 bg-[var(--surface)] p-1 rounded-xl border border-[var(--border)]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssignmentMode('employee');
+                      setFormData(prev => ({ ...prev, teamId: '', assigneeId: users[0]?.id || '' }));
+                    }}
+                    className={`py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer text-center ${
+                      assignmentMode === 'employee' ? 'bg-[#635BFF] text-white shadow-xs' : 'text-[var(--text-sec)] hover:text-[var(--text-main)]'
+                    }`}
                   >
-                    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Assignee</label>
-                  <select
-                    value={formData.assigneeId}
-                    onChange={(e) => setFormData({ ...formData, assigneeId: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
+                    Any Employee
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssignmentMode('team');
+                      setFormData(prev => ({ ...prev, assigneeId: '', teamId: teams[0]?.id || '' }));
+                    }}
+                    className={`py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer text-center ${
+                      assignmentMode === 'team' ? 'bg-[#635BFF] text-white shadow-xs' : 'text-[var(--text-sec)] hover:text-[var(--text-main)]'
+                    }`}
                   >
-                    {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                  </select>
+                    Entire Team
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssignmentMode('member');
+                      const firstTeam = teams[0]?.id || '';
+                      setSelectedTeamForMember(firstTeam);
+                      const members = users.filter(u => teams.find(t => t.id === firstTeam)?.memberIds?.includes(u.id));
+                      setFormData(prev => ({ ...prev, teamId: firstTeam, assigneeId: members[0]?.id || '' }));
+                    }}
+                    className={`py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer text-center ${
+                      assignmentMode === 'member' ? 'bg-[#635BFF] text-white shadow-xs' : 'text-[var(--text-sec)] hover:text-[var(--text-main)]'
+                    }`}
+                  >
+                    Team Member
+                  </button>
                 </div>
+
+                {/* Option 1: Any Eligible Active Company Employee */}
+                {assignmentMode === 'employee' && (
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      placeholder="Search employee name, department, or role..."
+                      value={employeeSearch}
+                      onChange={(e) => setEmployeeSearch(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-main)] outline-none"
+                    />
+                    <div className="max-h-36 overflow-y-auto space-y-1.5 border border-[var(--border)] rounded-lg p-1.5 bg-[var(--surface)]">
+                      {users
+                        .filter(u => u.status === 'Active')
+                        .filter(u => u.name.toLowerCase().includes(employeeSearch.toLowerCase()) || u.department.toLowerCase().includes(employeeSearch.toLowerCase()))
+                        .map(u => {
+                          const isSelected = formData.assigneeId === u.id;
+                          return (
+                            <div
+                              key={u.id}
+                              onClick={() => setFormData({ ...formData, assigneeId: u.id, teamId: '' })}
+                              className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
+                                isSelected ? 'bg-[#635BFF]/10 border border-[#635BFF]' : 'hover:bg-[var(--bg-main)]'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <div className="w-6 h-6 rounded-full bg-[#1E6091] text-white text-[9px] font-bold flex items-center justify-center shrink-0 tracking-wider">
+                                  {getInitials(u.name)}
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-[var(--text-main)] leading-tight">{u.name}</p>
+                                  <p className="text-[10px] text-[var(--text-sec)]">{u.designation} • {u.department}</p>
+                                </div>
+                              </div>
+                              {isSelected && <span className="text-[10px] font-bold text-[#635BFF]">Selected</span>}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Option 2: Entire Team */}
+                {assignmentMode === 'team' && (
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      placeholder="Search team name or department..."
+                      value={teamSearch}
+                      onChange={(e) => setTeamSearch(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-main)] outline-none"
+                    />
+                    <div className="max-h-36 overflow-y-auto space-y-1.5 border border-[var(--border)] rounded-lg p-1.5 bg-[var(--surface)]">
+                      {teams
+                        .filter(t => t.name.toLowerCase().includes(teamSearch.toLowerCase()) || t.department.toLowerCase().includes(teamSearch.toLowerCase()))
+                        .map(t => {
+                          const isSelected = formData.teamId === t.id && !formData.assigneeId;
+                          const leader = users.find(u => u.id === t.leaderId);
+                          return (
+                            <div
+                              key={t.id}
+                              onClick={() => setFormData({ ...formData, teamId: t.id, assigneeId: '' })}
+                              className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
+                                isSelected ? 'bg-[#635BFF]/10 border border-[#635BFF]' : 'hover:bg-[var(--bg-main)]'
+                              }`}
+                            >
+                              <div>
+                                <p className="text-xs font-semibold text-[var(--text-main)] leading-tight">{t.name}</p>
+                                <p className="text-[10px] text-[var(--text-sec)]">
+                                  Lead: {leader?.name || 'Unassigned'} • {t.memberIds?.length || 0} members
+                                </p>
+                              </div>
+                              {isSelected && <span className="text-[10px] font-bold text-[#635BFF]">Selected</span>}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Option 3: Specific Team Member */}
+                {assignmentMode === 'member' && (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[var(--text-sec)] mb-1">Step 1: Select Team</label>
+                      <select
+                        value={selectedTeamForMember}
+                        onChange={(e) => {
+                          const tid = e.target.value;
+                          setSelectedTeamForMember(tid);
+                          const members = users.filter(u => teams.find(t => t.id === tid)?.memberIds?.includes(u.id));
+                          setFormData(prev => ({ ...prev, teamId: tid, assigneeId: members[0]?.id || '' }));
+                        }}
+                        className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-main)] outline-none"
+                      >
+                        {teams.map(t => (
+                          <option key={t.id} value={t.id}>{t.name} ({t.department})</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[var(--text-sec)] mb-1">Step 2: Choose Team Member</label>
+                      <div className="max-h-32 overflow-y-auto space-y-1.5 border border-[var(--border)] rounded-lg p-1.5 bg-[var(--surface)]">
+                        {users
+                          .filter(u => teams.find(t => t.id === selectedTeamForMember)?.memberIds?.includes(u.id))
+                          .map(u => {
+                            const isSelected = formData.assigneeId === u.id;
+                            return (
+                              <div
+                                key={u.id}
+                                onClick={() => setFormData({ ...formData, assigneeId: u.id, teamId: selectedTeamForMember })}
+                                className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
+                                  isSelected ? 'bg-[#635BFF]/10 border border-[#635BFF]' : 'hover:bg-[var(--bg-main)]'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2">
+                                  <div className="w-5 h-5 rounded-full bg-[#1E6091] text-white text-[8px] font-bold flex items-center justify-center shrink-0 tracking-wider">
+                                    {getInitials(u.name)}
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-semibold text-[var(--text-main)] leading-tight">{u.name}</p>
+                                    <p className="text-[10px] text-[var(--text-sec)]">{u.designation}</p>
+                                  </div>
+                                </div>
+                                {isSelected && <span className="text-[10px] font-bold text-[#635BFF]">Assigned</span>}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -603,16 +850,25 @@ export default function TasksPage() {
               <div className="pt-3 border-t border-[var(--border)] flex justify-end gap-2">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setModalOpen(false)}
-                  className="px-4 py-2 text-xs text-[var(--text-sec)] hover:bg-[var(--bg-main)] rounded-lg cursor-pointer"
+                  className="px-4 py-2 text-xs text-[var(--text-sec)] hover:bg-[var(--bg-main)] rounded-lg cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs bg-[#635BFF] hover:bg-[#4942D9] text-white font-semibold rounded-lg shadow-xs cursor-pointer"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 text-xs bg-[#635BFF] hover:bg-[#4942D9] text-white font-semibold rounded-lg shadow-xs cursor-pointer disabled:opacity-70 flex items-center gap-2"
                 >
-                  Save Task
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>Save Task</span>
+                  )}
                 </button>
               </div>
             </form>

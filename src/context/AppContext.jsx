@@ -1,34 +1,45 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { StorageService, initStorage, resetToInitialData } from '../services/storageService';
+import React, { createContext, useState, useEffect, useCallback } from 'react';
+import {
+  AuthAPI,
+  DataAPI,
+  UsersAPI,
+  TeamsAPI,
+  ProjectsAPI,
+  TasksAPI,
+  DocumentsAPI,
+  CalendarAPI,
+  NotificationsAPI,
+  AnnouncementsAPI,
+  ConversationsAPI,
+  attemptSilentRefresh,
+  clearAccessToken
+} from '../services/api';
 
-const AppContext = createContext();
+export const AppContext = createContext();
 
-export const AppProvider = ({ children }) => {
-  // Initialize storage once
-  initStorage();
+export function AppProvider({ children }) {
+  const [theme, setThemeState] = useState(() => localStorage.getItem('nx_theme') || 'light');
+  
+  // Real authenticated user state (restored via server /api/v1/auth/refresh)
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
 
-  const [theme, setThemeState] = useState(() => StorageService.getTheme());
-  const [currentUser, setCurrentUserState] = useState(() => {
-    const uid = StorageService.getCurrentUserId();
-    return StorageService.getUserById(uid) || StorageService.getUsers()[0];
-  });
+  // Application Data States (Authoritative from Backend Database)
+  const [users, setUsers] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [teams, setTeams] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [documents, setDocuments] = useState([]);
+  const [folderPermissions, setFolderPermissions] = useState([]);
+  const [conversations, setConversations] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
 
-  const [users, setUsers] = useState(() => StorageService.getUsers());
-  const [projects, setProjects] = useState(() => StorageService.getProjects());
-  const [tasks, setTasks] = useState(() => StorageService.getTasks());
-  const [teams, setTeams] = useState(() => StorageService.getTeams());
-  const [events, setEvents] = useState(() => StorageService.getEvents());
-  const [documents, setDocuments] = useState(() => StorageService.getDocuments());
-  const [conversations, setConversations] = useState(() => StorageService.getConversations());
-  const [notifications, setNotifications] = useState(() => StorageService.getNotifications());
-  const [announcements] = useState(() => StorageService.getAnnouncements());
-
-  // Search dialog global state
   const [searchOpen, setSearchOpen] = useState(false);
-  // Quick Create Modal global state
   const [quickCreateOpen, setQuickCreateOpen] = useState(false);
 
-  // Sync theme to root class
+  // Synchronize theme to root class
   useEffect(() => {
     const root = document.documentElement;
     if (theme === 'dark') {
@@ -36,105 +47,240 @@ export const AppProvider = ({ children }) => {
     } else {
       root.classList.remove('dark');
     }
-    StorageService.setTheme(theme);
+    localStorage.setItem('nx_theme', theme);
   }, [theme]);
+
+  // Fetch all backend datasets when authenticated in a single batch query
+  const refreshAppData = useCallback(async () => {
+    if (!currentUser) return;
+    try {
+      const data = await DataAPI.bootstrap();
+      if (data) {
+        setUsers(data.users || []);
+        setTeams(data.teams || []);
+        setProjects(data.projects || []);
+        setTasks(data.tasks || []);
+        setDocuments(data.documents || []);
+        setFolderPermissions(data.folderPermissions || []);
+        setEvents(data.events || []);
+        setNotifications(data.notifications || []);
+        setAnnouncements(data.announcements || []);
+        setConversations(data.conversations || []);
+      }
+    } catch (err) {
+      console.error('[REFRESH APP DATA ERROR]', err);
+    }
+  }, [currentUser]);
+
+  // Session restoration on page load strictly via silent refresh endpoint
+  const restoreSession = useCallback(async () => {
+    setIsAuthLoading(true);
+    try {
+      const refreshed = await attemptSilentRefresh();
+      if (refreshed?.user) {
+        setCurrentUser(refreshed.user);
+      } else {
+        setCurrentUser(null);
+      }
+    } catch (err) {
+      setCurrentUser(null);
+    } finally {
+      setIsAuthLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    restoreSession();
+  }, [restoreSession]);
+
+  useEffect(() => {
+    if (currentUser) {
+      refreshAppData();
+    } else {
+      setUsers([]);
+      setTeams([]);
+      setProjects([]);
+      setTasks([]);
+      setDocuments([]);
+      setEvents([]);
+      setNotifications([]);
+      setConversations([]);
+    }
+  }, [currentUser, refreshAppData]);
 
   const toggleTheme = () => {
     setThemeState(prev => (prev === 'light' ? 'dark' : 'light'));
   };
 
-  const switchUser = (userId) => {
-    StorageService.setCurrentUserId(userId);
-    const user = StorageService.getUserById(userId);
-    setCurrentUserState(user);
+  // Real Authentication methods
+  const login = async (email, password) => {
+    const data = await AuthAPI.login(email, password);
+    if (!data?.user) {
+      throw new Error('Authentication failed: Missing user profile');
+    }
+    setCurrentUser(data.user);
+    return data.user;
   };
 
-  // CRUD WRAPPERS TO UPDATE BOTH STORAGE & REACT STATE
-  const updateProject = (project) => {
-    const updated = StorageService.saveProject(project);
-    setProjects(StorageService.getProjects());
+  const logout = async () => {
+    try {
+      await AuthAPI.logout();
+    } catch (err) {
+      console.warn('Logout API failed:', err.message);
+    } finally {
+      clearAccessToken();
+      setCurrentUser(null);
+    }
+  };
+
+  // BACKEND CRUD HANDLERS
+  const updateProject = async (project) => {
+    if (project.id) {
+      await ProjectsAPI.update(project);
+    } else {
+      await ProjectsAPI.create(project);
+    }
+    const updated = await ProjectsAPI.getAll();
+    setProjects(updated);
     return updated;
   };
 
-  const removeProject = (id) => {
-    StorageService.deleteProject(id);
-    setProjects(StorageService.getProjects());
+  const removeProject = async (id) => {
+    await ProjectsAPI.delete(id);
+    setProjects(prev => prev.filter(p => p.id !== id));
   };
 
-  const updateTask = (task) => {
-    const updated = StorageService.saveTask(task);
-    setTasks(StorageService.getTasks());
+  const updateTask = async (task) => {
+    if (task.id) {
+      await TasksAPI.update(task);
+    } else {
+      await TasksAPI.create(task);
+    }
+    const updated = await TasksAPI.getAll();
+    setTasks(updated);
     return updated;
   };
 
-  const removeTask = (id) => {
-    StorageService.deleteTask(id);
-    setTasks(StorageService.getTasks());
+  const removeTask = async (id) => {
+    await TasksAPI.delete(id);
+    setTasks(prev => prev.filter(t => t.id !== id));
   };
 
-  const updateTeam = (team) => {
-    const updated = StorageService.saveTeam(team);
-    setTeams(StorageService.getTeams());
+  const updateTeam = async (team) => {
+    if (team.id) {
+      await TeamsAPI.update(team);
+    } else {
+      await TeamsAPI.create(team);
+    }
+    const updated = await TeamsAPI.getAll();
+    setTeams(updated);
     return updated;
   };
 
-  const removeTeam = (id) => {
-    StorageService.deleteTeam(id);
-    setTeams(StorageService.getTeams());
+  const removeTeam = async (id) => {
+    await TeamsAPI.delete(id);
+    setTeams(prev => prev.filter(t => t.id !== id));
   };
 
-  const updateUser = (user) => {
-    const updated = StorageService.saveUser(user);
-    setUsers(StorageService.getUsers());
-    if (currentUser?.id === user.id) setCurrentUserState(updated);
+  const updateUser = async (user) => {
+    let saved;
+    if (user.id && user.id !== 'usr-temp') {
+      saved = await UsersAPI.update(user);
+    } else {
+      saved = await UsersAPI.create(user);
+    }
+    const updated = await UsersAPI.getAll();
+    setUsers(updated);
+    if (currentUser?.id === user.id && saved) {
+      setCurrentUser(saved);
+    }
+    return saved;
+  };
+
+  const removeUser = async (id) => {
+    await UsersAPI.delete(id);
+    setUsers(prev => prev.filter(u => u.id !== id));
+  };
+
+  const updateDocument = async (doc) => {
+    if (doc.id) {
+      await DocumentsAPI.update(doc);
+    } else {
+      await DocumentsAPI.create(doc);
+    }
+    const updated = await DocumentsAPI.getAll();
+    setDocuments(updated);
     return updated;
   };
 
-  const removeUser = (id) => {
-    StorageService.deleteUser(id);
-    setUsers(StorageService.getUsers());
+  const removeDocument = async (id) => {
+    await DocumentsAPI.delete(id);
+    setDocuments(prev => prev.filter(d => d.id !== id));
   };
 
-  const updateDocument = (doc) => {
-    const updated = StorageService.saveDocument(doc);
-    setDocuments(StorageService.getDocuments());
+  const assignDocumentAccess = async (id, userIds) => {
+    await DocumentsAPI.assignFileAccess(id, userIds);
+    setDocuments(prev => prev.map(d => d.id === id ? { ...d, assignedUserIds: userIds } : d));
+  };
+
+  const assignFolderAccess = async (folderKey, userIds) => {
+    await DocumentsAPI.assignFolderAccess(folderKey, userIds);
+    setFolderPermissions(prev => {
+      const filtered = prev.filter(fp => fp.folderKey !== folderKey);
+      const newlyAdded = userIds.map(uid => ({ folderKey, userId: uid }));
+      return [...filtered, ...newlyAdded];
+    });
+  };
+
+  const updateEvent = async (event) => {
+    if (event.id) {
+      await CalendarAPI.update(event);
+    } else {
+      await CalendarAPI.create(event);
+    }
+    const updated = await CalendarAPI.getAll();
+    setEvents(updated);
     return updated;
   };
 
-  const removeDocument = (id) => {
-    StorageService.deleteDocument(id);
-    setDocuments(StorageService.getDocuments());
+  const removeEvent = async (id) => {
+    await CalendarAPI.delete(id);
+    setEvents(prev => prev.filter(e => e.id !== id));
   };
 
-  const updateEvent = (event) => {
-    const updated = StorageService.saveEvent(event);
-    setEvents(StorageService.getEvents());
-    return updated;
+  const markNotificationRead = async (id) => {
+    await NotificationsAPI.markRead(id);
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
   };
 
-  const removeEvent = (id) => {
-    StorageService.deleteEvent(id);
-    setEvents(StorageService.getEvents());
+  const markAllNotificationsRead = async () => {
+    await NotificationsAPI.markAllRead();
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   };
 
-  const markNotificationRead = (id) => {
-    StorageService.markNotificationAsRead(id);
-    setNotifications(StorageService.getNotifications());
+  const removeNotification = async (id) => {
+    await NotificationsAPI.delete(id);
+    setNotifications(prev => prev.filter(n => n.id !== id));
   };
 
-  const markAllNotificationsRead = () => {
-    StorageService.markAllNotificationsAsRead();
-    setNotifications(StorageService.getNotifications());
+  const publishAnnouncement = async (announcement) => {
+    await AnnouncementsAPI.create(announcement);
+    await refreshAppData();
   };
 
-  const removeNotification = (id) => {
-    StorageService.deleteNotification(id);
-    setNotifications(StorageService.getNotifications());
+  const removeAnnouncement = async (id) => {
+    await AnnouncementsAPI.delete(id);
+    setAnnouncements(prev => prev.filter(a => a.id !== id));
   };
 
-  // Permission checks based on currentUser.role
+  const resetToInitialData = () => {
+    window.location.reload();
+  };
+
+  // Authoritative permissions derived from authenticated currentUser
   const role = currentUser?.role || 'team_member';
   const permissions = {
+    isAuthenticated: !!currentUser,
     isAdmin: role === 'admin',
     isPM: role === 'project_manager' || role === 'admin',
     isTeamMember: role === 'team_member',
@@ -145,12 +291,12 @@ export const AppProvider = ({ children }) => {
     canViewAllReports: role === 'admin' || role === 'project_manager',
     canEditProject: (project) => {
       if (role === 'admin') return true;
-      if (role === 'project_manager' && project.managerId === currentUser.id) return true;
+      if (role === 'project_manager' && project.managerId === currentUser?.id) return true;
       return false;
     },
     canEditTask: (task) => {
       if (role === 'admin' || role === 'project_manager') return true;
-      return task.assigneeId === currentUser.id;
+      return task.assigneeId === currentUser?.id;
     }
   };
 
@@ -160,13 +306,16 @@ export const AppProvider = ({ children }) => {
         theme,
         toggleTheme,
         currentUser,
-        switchUser,
+        isAuthLoading,
+        login,
+        logout,
         users,
         projects,
         tasks,
         teams,
         events,
         documents,
+        folderPermissions,
         conversations,
         notifications,
         announcements,
@@ -185,12 +334,17 @@ export const AppProvider = ({ children }) => {
         removeUser,
         updateDocument,
         removeDocument,
+        assignDocumentAccess,
+        assignFolderAccess,
         updateEvent,
         removeEvent,
         markNotificationRead,
         markAllNotificationsRead,
         removeNotification,
-        resetToInitialData
+        publishAnnouncement,
+        removeAnnouncement,
+        resetToInitialData,
+        refreshAppData
       }}
     >
       {children}
@@ -198,5 +352,4 @@ export const AppProvider = ({ children }) => {
   );
 };
 
-export const useApp = () => useContext(AppContext);
-
+export { useApp } from './useApp';

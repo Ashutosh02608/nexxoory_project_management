@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
 import { CheckSquare, Clock, AlertTriangle, CheckCircle2, ArrowRight } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { getInitials } from '../utils/avatar';
 
 export default function MyWorkPage() {
   const { currentUser, tasks, projects, updateTask } = useApp();
 
   const [activeTab, setActiveTab] = useState('tasks'); // 'tasks', 'projects', 'history'
 
-  // Current user's tasks
-  const myTasks = tasks.filter(t => t.assigneeId === currentUser.id);
-  const myProjects = projects.filter(p => p.managerId === currentUser.id || p.tags?.includes(currentUser.department));
+  // Current user's tasks: directly assigned to user OR assigned to user's team
+  const userTeamIds = useApp().teams?.filter(tm => tm.memberIds?.includes(currentUser?.id) || tm.leaderId === currentUser?.id).map(tm => tm.id) || [];
+  const myTasks = tasks.filter(t => t.assigneeId === currentUser?.id || (!t.assigneeId && t.teamId && userTeamIds.includes(t.teamId)));
+  const myProjects = projects.filter(p => p.managerId === currentUser?.id || p.tags?.includes(currentUser?.department) || userTeamIds.includes(p.teamId));
 
   const pendingTasks = myTasks.filter(t => t.status !== 'Completed');
   const completedTasks = myTasks.filter(t => t.status === 'Completed');
@@ -36,11 +38,13 @@ export default function MyWorkPage() {
       {/* Title & Personalized Greeting */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <img src={currentUser.avatar} alt={currentUser.name} className="w-12 h-12 rounded-full object-cover border-2 border-[#635BFF]" />
+          <div className="w-12 h-12 rounded-full bg-[#1E6091] text-white text-sm font-bold flex items-center justify-center shrink-0 border-2 border-[#1E6091] tracking-wider">
+            {getInitials(currentUser?.name)}
+          </div>
           <div>
             <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-main)] tracking-tight">My Workspace</h1>
             <p className="text-xs sm:text-sm text-[var(--text-sec)]">
-              Welcome back, {currentUser.name} ({currentUser.designation})
+              Welcome back, {currentUser?.name} ({currentUser?.designation})
             </p>
           </div>
         </div>
@@ -184,8 +188,8 @@ export default function MyWorkPage() {
               <h3 className="font-bold text-sm text-[var(--text-main)]">{p.name}</h3>
               <p className="text-xs text-[var(--text-sec)] mt-1">{p.description}</p>
               <div className="mt-4 pt-3 border-t border-[var(--border)] flex items-center justify-between text-xs">
-                <span>Progress: {p.progress}%</span>
-                <span className="font-semibold text-[#635BFF]">${p.budget?.toLocaleString()}</span>
+                <span>Progress</span>
+                <span className="font-semibold text-[#635BFF]">{p.progress}%</span>
               </div>
             </div>
           ))}

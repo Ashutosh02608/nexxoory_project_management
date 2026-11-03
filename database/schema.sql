@@ -80,6 +80,15 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id);
 
+-- Shared persistent rate limits for serverless instances
+CREATE TABLE IF NOT EXISTS rate_limits (
+    key VARCHAR(255) PRIMARY KEY,
+    points INT NOT NULL DEFAULT 1,
+    expire_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_rate_limits_expire ON rate_limits(expire_at);
+
 -- =============================================================================
 -- 2. TEAMS & MEMBERSHIP
 -- =============================================================================

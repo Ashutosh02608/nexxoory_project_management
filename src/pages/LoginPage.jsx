@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Lock,
@@ -7,57 +7,117 @@ import {
   CheckCircle2,
   KeyRound,
   Eye,
-  EyeOff
+  EyeOff,
+  AlertCircle
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { AuthAPI } from '../services/api';
 import logoImg from '../assets/nexxoory_logo.webp';
 
 export default function LoginPage() {
-  const { users, switchUser } = useApp();
+  const { login, users } = useApp();
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState('login'); // 'login', 'forgot', 'reset'
-  const [selectedUserId, setSelectedUserId] = useState(users[0]?.id || 'usr-admin');
   const [email, setEmail] = useState('admin@nexxoory.com');
-  const [password, setPassword] = useState('••••••••••••');
+  const [password, setPassword] = useState('admin123');
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
+  const [resetToken, setResetToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  // Cursor position for background spotlight
-  const [cursorPos, setCursorPos] = useState({ x: -1000, y: -1000 });
+  // Cursor position for background spotlight using direct transform & lerp for zero lag + buttery smoothness
+  const spotlightRef = useRef(null);
+  const targetPos = useRef({ x: -1000, y: -1000 });
+  const currentPos = useRef({ x: -1000, y: -1000 });
+
+  useEffect(() => {
+    let animId;
+    const updateSpotlight = () => {
+      // 0.22 lerp smoothing factor
+      currentPos.current.x += (targetPos.current.x - currentPos.current.x) * 0.22;
+      currentPos.current.y += (targetPos.current.y - currentPos.current.y) * 0.22;
+
+      if (spotlightRef.current) {
+        spotlightRef.current.style.transform = `translate3d(${currentPos.current.x}px, ${currentPos.current.y}px, 0) translate(-50%, -50%)`;
+      }
+      animId = requestAnimationFrame(updateSpotlight);
+    };
+
+    animId = requestAnimationFrame(updateSpotlight);
+    return () => cancelAnimationFrame(animId);
+  }, []);
 
   const handleMouseMove = (e) => {
-    setCursorPos({ x: e.clientX, y: e.clientY });
+    targetPos.current.x = e.clientX;
+    targetPos.current.y = e.clientY;
   };
 
   const handlePersonaSelect = (user) => {
-    setSelectedUserId(user.id);
     setEmail(user.email);
+    setPassword('admin123');
+    setErrorMsg('');
   };
 
-  const handleLoginSubmit = (e) => {
+  const handleLoginSubmit = async (e) => {
     e.preventDefault();
-    switchUser(selectedUserId);
-    navigate('/');
-  };
+    setIsLoading(true);
+    setErrorMsg('');
 
-  const handleForgotSubmit = (e) => {
-    e.preventDefault();
-    setSuccessMsg(`Recovery token sent to ${email}`);
-    setTimeout(() => {
-      setActiveTab('reset');
-      setSuccessMsg('');
-    }, 1200);
-  };
-
-  const handleResetSubmit = (e) => {
-    e.preventDefault();
-    setSuccessMsg('Password updated! Redirecting...');
-    setTimeout(() => {
-      switchUser(selectedUserId);
+    try {
+      await login(email, password);
       navigate('/');
-    }, 1000);
+    } catch (err) {
+      setErrorMsg(err.message || 'Login failed. Please verify credentials.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleForgotSubmit = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    try {
+      const res = await AuthAPI.forgotPassword(email);
+      setSuccessMsg(res.message || 'If an account exists, a recovery token has been processed.');
+      if (res.data?.devToken) {
+        setResetToken(res.data.devToken);
+      }
+      setTimeout(() => {
+        setActiveTab('reset');
+      }, 1500);
+    } catch (err) {
+      setErrorMsg(err.message || 'Unable to request password recovery.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResetSubmit = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    try {
+      await AuthAPI.resetPassword(resetToken, newPassword);
+      setSuccessMsg('Password successfully updated! Redirecting to login...');
+      setTimeout(() => {
+        setActiveTab('login');
+        setPassword(newPassword);
+        setSuccessMsg('');
+      }, 1500);
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to reset password. Token may be expired or invalid.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -65,15 +125,14 @@ export default function LoginPage() {
       onMouseMove={handleMouseMove}
       className="h-screen w-screen bg-[var(--bg-main)] flex flex-col justify-between overflow-hidden relative select-none p-4 sm:p-6"
     >
-      
-      {/* 1. CURSOR SPOTLIGHT LAYER: Layered behind the login card (z-0) */}
+      {/* 1. CURSOR SPOTLIGHT LAYER */}
       <div
-        className="fixed pointer-events-none rounded-full blur-2xl transition-transform duration-75 ease-out -translate-x-1/2 -translate-y-1/2 z-0"
+        ref={spotlightRef}
+        className="fixed top-0 left-0 pointer-events-none rounded-full blur-2xl z-0 will-change-transform"
         style={{
-          left: `${cursorPos.x}px`,
-          top: `${cursorPos.y}px`,
           width: '450px',
           height: '450px',
+          transform: 'translate3d(-1000px, -1000px, 0) translate(-50%, -50%)',
           background: 'radial-gradient(circle, rgba(30, 96, 145, 0.22) 0%, rgba(82, 182, 154, 0.08) 45%, transparent 75%)'
         }}
       />
@@ -116,27 +175,19 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* Top compact brand header */}
-      <header className="flex items-center justify-between max-w-5xl mx-auto w-full shrink-0 relative z-20">
-        <div className="flex items-center gap-2.5">
-          <div className="p-1 rounded-xl bg-[var(--surface)] border border-[var(--border)] shadow-xs">
-            <img src={logoImg} alt="Logo" className="h-7 w-auto object-contain" />
-          </div>
-          <span className="font-extrabold text-xs tracking-wider text-[var(--text-main)] uppercase">
-            Nexxoory Solutions
-          </span>
+      {/* Header */}
+      <header className="relative z-10 flex items-center justify-between max-w-7xl mx-auto w-full">
+        <div className="flex items-center gap-3">
+          <img src={logoImg} alt="Nexxoory" className="h-10 w-auto object-contain" />
         </div>
-
-        <div className="flex items-center gap-2 text-[11px] text-[var(--text-sec)]">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-          <span>Demo Environment</span>
+        <div className="text-xs text-[var(--text-sec)]">
+          Production Security: <span className="font-semibold text-[#16A36A]">Argon2id + JWT</span>
         </div>
       </header>
 
-      {/* Center Login Card Container (Opaque Solid Card Layered High at z-20 with Shadow Masking) */}
-      <main className="flex items-center justify-center shrink-0 relative z-20">
-        <div className="w-full max-w-sm sm:max-w-md bg-[var(--surface)] border border-[var(--border)] rounded-3xl shadow-[0_20px_45px_-12px_rgba(30,96,145,0.28)] p-6 sm:p-7 relative z-20">
-          
+      {/* Main Card Viewport */}
+      <div className="relative z-10 flex items-center justify-center flex-1 my-auto">
+        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-3xl w-full max-w-md shadow-2xl p-6 sm:p-8 backdrop-blur-md">
           {/* Logo with Spotlight Glow */}
           <div className="flex flex-col items-center mb-4">
             <div className="relative group mb-2">
@@ -149,162 +200,140 @@ export default function LoginPage() {
                 />
               </div>
             </div>
-
-            <h1 className="text-lg font-extrabold text-[var(--text-main)] tracking-tight">
+            <h2 className="text-xl sm:text-2xl font-bold text-[var(--text-main)] tracking-tight">
               {activeTab === 'login' && 'Sign in to Nexxoory'}
-              {activeTab === 'forgot' && 'Reset Password'}
+              {activeTab === 'forgot' && 'Reset Your Password'}
               {activeTab === 'reset' && 'Create New Password'}
-            </h1>
-            <p className="text-[11px] text-[var(--text-sec)] text-center mt-0.5">
-              {activeTab === 'login' && 'Select a demo persona or enter account credentials.'}
-              {activeTab === 'forgot' && 'Enter your email to receive recovery instructions.'}
-              {activeTab === 'reset' && 'Enter your replacement credential.'}
+            </h2>
+            <p className="text-xs text-[var(--text-sec)] mt-1">
+              {activeTab === 'login' && 'Enter your organizational credentials'}
+              {activeTab === 'forgot' && 'Enter registered email to generate recovery token'}
+              {activeTab === 'reset' && 'Provide valid reset token and new credentials'}
             </p>
           </div>
 
-          {/* Success Banner */}
-          {successMsg && (
-            <div className="mb-3 p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 text-[11px] font-semibold flex items-center gap-2">
-              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-              <span>{successMsg}</span>
+          {/* Feedback alerts */}
+          {errorMsg && (
+            <div className="mb-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{errorMsg}</span>
             </div>
           )}
 
-          {/* 1-Click Role Switch */}
-          {activeTab === 'login' && (
-            <div className="mb-3.5">
-              <span className="text-[9px] font-bold text-[var(--text-sec)] uppercase tracking-wider block mb-1.5">
-                Quick Role Switch
-              </span>
-              <div className="grid grid-cols-3 gap-2">
-                {users.slice(0, 3).map((u) => {
-                  const isSelected = selectedUserId === u.id;
-                  return (
-                    <button
-                      key={u.id}
-                      type="button"
-                      onClick={() => handlePersonaSelect(u)}
-                      className={`p-1.5 rounded-xl border flex flex-col items-center gap-1 transition-all cursor-pointer ${
-                        isSelected
-                          ? 'border-[#1E6091] dark:border-[#38BDF8] bg-[#1E6091]/10 shadow-xs'
-                          : 'border-[var(--border)] bg-[var(--bg-main)] hover:border-[#1E6091]/40'
-                      }`}
-                    >
-                      <img src={u.avatar} alt={u.name} className="w-6 h-6 rounded-full object-cover border border-[#1E6091]" />
-                      <div className="text-center leading-tight">
-                        <p className="text-[10px] font-bold text-[var(--text-main)] truncate max-w-[70px]">{u.name.split(' ')[0]}</p>
-                        <p className="text-[8px] text-[#1E6091] dark:text-[#38BDF8] font-semibold capitalize truncate max-w-[70px]">
-                          {u.role === 'project_manager' ? 'PM' : u.role.replace('_', ' ')}
-                        </p>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+          {successMsg && (
+            <div className="mb-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>{successMsg}</span>
             </div>
           )}
 
           {/* LOGIN FORM */}
           {activeTab === 'login' && (
-            <form onSubmit={handleLoginSubmit} className="space-y-3">
+            <form onSubmit={handleLoginSubmit} className="space-y-4">
               <div>
-                <label className="block text-[11px] font-bold text-[var(--text-main)] mb-1">Email</label>
+                <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Email Address</label>
                 <div className="relative">
-                  <Mail className="w-3.5 h-3.5 text-[var(--text-sec)] absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Mail className="w-4 h-4 text-[var(--text-sec)] absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="email"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none focus:border-[#1E6091]"
+                    placeholder="name@nexxoory.com"
+                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none focus:border-[#1E6091] transition-all"
                   />
                 </div>
               </div>
 
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-[11px] font-bold text-[var(--text-main)]">Password</label>
+                  <label className="text-xs font-semibold text-[var(--text-main)]">Password</label>
                   <button
                     type="button"
-                    onClick={() => setActiveTab('forgot')}
-                    className="text-[10px] text-[#1E6091] dark:text-[#38BDF8] hover:underline cursor-pointer"
+                    onClick={() => {
+                      setActiveTab('forgot');
+                      setErrorMsg('');
+                      setSuccessMsg('');
+                    }}
+                    className="text-[11px] text-[#1E6091] dark:text-[#38BDF8] hover:underline cursor-pointer"
                   >
-                    Forgot?
+                    Forgot password?
                   </button>
                 </div>
                 <div className="relative">
-                  <Lock className="w-3.5 h-3.5 text-[var(--text-sec)] absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Lock className="w-4 h-4 text-[var(--text-sec)] absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full pl-8 pr-9 py-2 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none focus:border-[#1E6091]"
+                    placeholder="••••••••••••"
+                    className="w-full pl-9 pr-10 py-2.5 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none focus:border-[#1E6091] transition-all"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-sec)] hover:text-[var(--text-main)] cursor-pointer"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-sec)] hover:text-[var(--text-main)]"
                   >
-                    {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between text-[11px] pt-0.5">
-                <label className="flex items-center gap-1.5 cursor-pointer text-[var(--text-sec)]">
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    className="rounded text-[#1E6091]"
-                  />
-                  <span>Remember me</span>
-                </label>
-              </div>
-
               <button
                 type="submit"
-                className="w-full py-2.5 px-4 bg-gradient-to-r from-[#1E6091] to-[#143A52] hover:opacity-95 text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer shadow-[#1E6091]/25 mt-1"
+                disabled={isLoading}
+                className="w-full mt-2 py-2.5 rounded-xl bg-[#1E6091] hover:bg-[#143A52] text-white text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
-                <span>Enter Workspace</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+                {isLoading ? (
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <span>Authenticate</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
             </form>
           )}
 
           {/* FORGOT PASSWORD FORM */}
           {activeTab === 'forgot' && (
-            <form onSubmit={handleForgotSubmit} className="space-y-3">
+            <form onSubmit={handleForgotSubmit} className="space-y-4">
               <div>
-                <label className="block text-[11px] font-bold text-[var(--text-main)] mb-1">Email</label>
+                <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Email Address</label>
                 <div className="relative">
-                  <Mail className="w-3.5 h-3.5 text-[var(--text-sec)] absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Mail className="w-4 h-4 text-[var(--text-sec)] absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="email"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
+                    placeholder="name@nexxoory.com"
+                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
                   />
                 </div>
               </div>
 
               <button
                 type="submit"
-                className="w-full py-2.5 px-4 bg-[#1E6091] hover:bg-[#143A52] text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                disabled={isLoading}
+                className="w-full py-2.5 rounded-xl bg-[#1E6091] hover:bg-[#143A52] text-white text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
-                <span>Send Reset Link</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+                {isLoading ? 'Processing...' : 'Generate Recovery Token'}
               </button>
 
-              <div className="text-center pt-1">
+              <div className="text-center">
                 <button
                   type="button"
-                  onClick={() => setActiveTab('login')}
-                  className="text-[11px] text-[var(--text-sec)] hover:text-[var(--text-main)] cursor-pointer"
+                  onClick={() => {
+                    setActiveTab('login');
+                    setErrorMsg('');
+                    setSuccessMsg('');
+                  }}
+                  className="text-xs text-[var(--text-sec)] hover:underline cursor-pointer"
                 >
-                  ← Back to sign in
+                  ← Back to login
                 </button>
               </div>
             </form>
@@ -312,49 +341,66 @@ export default function LoginPage() {
 
           {/* RESET PASSWORD FORM */}
           {activeTab === 'reset' && (
-            <form onSubmit={handleResetSubmit} className="space-y-3">
+            <form onSubmit={handleResetSubmit} className="space-y-4">
               <div>
-                <label className="block text-[11px] font-bold text-[var(--text-main)] mb-1">New Password</label>
+                <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Recovery Token</label>
                 <div className="relative">
-                  <KeyRound className="w-3.5 h-3.5 text-[var(--text-sec)] absolute left-3 top-1/2 -translate-y-1/2" />
+                  <KeyRound className="w-4 h-4 text-[var(--text-sec)] absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
-                    type="password"
+                    type="text"
                     required
-                    placeholder="New password"
-                    className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
+                    value={resetToken}
+                    onChange={(e) => setResetToken(e.target.value)}
+                    placeholder="Paste 64-char hex token"
+                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] font-mono outline-none"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-[var(--text-main)] mb-1">Confirm Password</label>
+                <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">New Password</label>
                 <div className="relative">
-                  <Lock className="w-3.5 h-3.5 text-[var(--text-sec)] absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Lock className="w-4 h-4 text-[var(--text-sec)] absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="password"
                     required
-                    placeholder="Confirm password"
-                    className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
+                    minLength={8}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Min 8 characters"
+                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
                   />
                 </div>
               </div>
 
               <button
                 type="submit"
-                className="w-full py-2.5 px-4 bg-[#1E6091] hover:bg-[#143A52] text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                disabled={isLoading}
+                className="w-full py-2.5 rounded-xl bg-[#16A36A] hover:bg-[#128354] text-white text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
-                <span>Update & Launch</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+                {isLoading ? 'Updating...' : 'Set New Password'}
               </button>
+
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('login');
+                    setErrorMsg('');
+                    setSuccessMsg('');
+                  }}
+                  className="text-xs text-[var(--text-sec)] hover:underline cursor-pointer"
+                >
+                  ← Cancel and return to login
+                </button>
+              </div>
             </form>
           )}
-
         </div>
-      </main>
+      </div>
 
-      {/* Footer */}
-      <footer className="text-center text-[10px] text-[var(--text-sec)] shrink-0 py-1 relative z-20">
-        <p>© 2026 Nexxoory Solutions Pvt. Ltd. • Project Management Suite</p>
+      <footer className="relative z-10 text-center text-[11px] text-[var(--text-sec)]">
+        &copy; 2026 Nexxoory Solutions. Enterprise Project Delivery Architecture.
       </footer>
     </div>
   );

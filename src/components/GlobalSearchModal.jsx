@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Search, X, FolderKanban, ListTodo, UserCircle2, ArrowRight } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { getInitials } from '../utils/avatar';
 import { useNavigate } from 'react-router-dom';
 
 export default function GlobalSearchModal() {
@@ -122,7 +123,9 @@ export default function GlobalSearchModal() {
                     className="flex items-center justify-between p-2.5 rounded-xl hover:bg-[var(--bg-main)] cursor-pointer transition-colors"
                   >
                     <div className="flex items-center gap-2.5">
-                      <img src={u.avatar} alt={u.name} className="w-6 h-6 rounded-full object-cover" />
+                      <div className="w-6 h-6 rounded-full bg-[#1E6091] text-white text-[9px] font-bold flex items-center justify-center shrink-0 tracking-wider">
+                        {getInitials(u.name)}
+                      </div>
                       <div>
                         <p className="text-xs font-semibold text-[var(--text-main)]">{u.name}</p>
                         <p className="text-[10px] text-[var(--text-sec)]">{u.designation} • {u.department}</p>

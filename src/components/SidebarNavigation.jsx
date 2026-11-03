@@ -1,46 +1,20 @@
 import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard,
-  CheckSquare,
-  FolderKanban,
-  ListTodo,
-  Users2,
-  UserCircle2,
-  CalendarDays,
-  GanttChartSquare,
-  FolderArchive,
-  MessageSquare,
-  BarChart3,
-  Bell,
-  Settings,
   ChevronLeft,
   ChevronRight,
   ShieldCheck,
   RotateCcw
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { getRoleNavigation } from '../config/rbac';
 import logoImg from '../assets/nexxoory_logo.webp';
 
 export default function SidebarNavigation() {
   const [collapsed, setCollapsed] = useState(false);
   const { currentUser, resetToInitialData } = useApp();
 
-  const navItems = [
-    { label: 'Dashboard', path: '/', icon: LayoutDashboard },
-    { label: 'My Work', path: '/my-work', icon: CheckSquare },
-    { label: 'Projects', path: '/projects', icon: FolderKanban },
-    { label: 'Tasks', path: '/tasks', icon: ListTodo },
-    { label: 'Teams', path: '/teams', icon: Users2 },
-    { label: 'Employees', path: '/employees', icon: UserCircle2 },
-    { label: 'Calendar', path: '/calendar', icon: CalendarDays },
-    { label: 'Timeline', path: '/timeline', icon: GanttChartSquare },
-    { label: 'Documents', path: '/documents', icon: FolderArchive },
-    { label: 'Messages', path: '/messages', icon: MessageSquare },
-    { label: 'Reports', path: '/reports', icon: BarChart3 },
-    { label: 'Notifications', path: '/notifications', icon: Bell },
-    { label: 'Settings', path: '/settings', icon: Settings },
-  ];
+  const navItems = getRoleNavigation(currentUser?.role);
 
   return (
     <aside
@@ -93,7 +67,7 @@ export default function SidebarNavigation() {
         </div>
 
         {/* Navigation items */}
-        <nav className="p-3 space-y-1.5 overflow-y-auto max-h-[calc(100vh-17rem)]">
+        <nav className="p-3 space-y-1.5 overflow-y-auto max-h-[calc(100vh-10rem)]">
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
@@ -115,34 +89,6 @@ export default function SidebarNavigation() {
             );
           })}
         </nav>
-      </div>
-
-      {/* Role indicator footer & demo reset */}
-      <div className="p-3 border-t border-[var(--border)] space-y-2">
-        {!collapsed && (
-          <div className="p-2.5 rounded-xl bg-[var(--bg-main)] border border-[var(--border)] flex items-center gap-2.5">
-            <ShieldCheck className="w-4 h-4 text-[#1E6091] dark:text-[#38BDF8] shrink-0" />
-            <div className="overflow-hidden">
-              <p className="text-[11px] font-semibold text-[var(--text-main)] truncate">Mode: {currentUser.role.replace('_', ' ')}</p>
-              <p className="text-[9px] text-[var(--text-sec)]">Frontend demo active</p>
-            </div>
-          </div>
-        )}
-
-        <button
-          onClick={() => {
-            if (window.confirm('Reset all mock data back to factory defaults?')) {
-              resetToInitialData();
-            }
-          }}
-          title="Reset demo data"
-          className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium text-[var(--text-sec)] hover:text-[#E05252] hover:bg-rose-500/10 border border-transparent hover:border-[#E05252]/20 transition-all cursor-pointer ${
-            collapsed ? 'justify-center px-0' : ''
-          }`}
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          {!collapsed && <span>Reset Mock Data</span>}
-        </button>
       </div>
     </aside>
   );

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { UserCircle2, Plus, Search, Edit2, Trash2, Mail, Briefcase, Building, X } from 'lucide-react';
+import { UserCircle2, Plus, Search, Edit2, Trash2, Mail, Briefcase, Building, X, Loader2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { getInitials } from '../utils/avatar';
+import { DEPARTMENTS, DEFAULT_DEPARTMENT } from '../constants/departments';
 
 export default function EmployeesPage() {
   const { users, updateUser, removeUser, tasks, projects, permissions } = useApp();
@@ -12,13 +14,15 @@ export default function EmployeesPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [activeProfile, setActiveProfile] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   // Form state
   const [formData, setFormData] = useState({
     name: '',
     email: '',
     designation: '',
-    department: 'Frontend Core',
+    department: DEFAULT_DEPARTMENT,
     role: 'team_member',
     status: 'Active',
     avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'
@@ -26,11 +30,12 @@ export default function EmployeesPage() {
 
   const openCreateModal = () => {
     setEditingUser(null);
+    setSubmitError('');
     setFormData({
       name: '',
       email: '',
       designation: '',
-      department: 'Frontend Core',
+      department: DEFAULT_DEPARTMENT,
       role: 'team_member',
       status: 'Active',
       avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150'
@@ -40,17 +45,26 @@ export default function EmployeesPage() {
 
   const openEditModal = (u) => {
     setEditingUser(u);
+    setSubmitError('');
     setFormData(u);
     setModalOpen(true);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    updateUser({
-      ...formData,
-      id: editingUser ? editingUser.id : undefined
-    });
-    setModalOpen(false);
+    setIsSubmitting(true);
+    setSubmitError('');
+    try {
+      await updateUser({
+        ...formData,
+        id: editingUser ? editingUser.id : undefined
+      });
+      setModalOpen(false);
+    } catch (err) {
+      setSubmitError(err.message || 'Failed to save employee record');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const filteredUsers = users.filter(u => {
@@ -102,12 +116,9 @@ export default function EmployeesPage() {
           className="text-xs px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
         >
           <option value="ALL">All Departments</option>
-          <option value="Executive">Executive</option>
-          <option value="Product Delivery">Product Delivery</option>
-          <option value="Frontend Core">Frontend Core</option>
-          <option value="DevOps & Infrastructure">DevOps & Infrastructure</option>
-          <option value="Design Studio">Design Studio</option>
-          <option value="Quality Assurance">Quality Assurance</option>
+          {DEPARTMENTS.map((dept) => (
+            <option key={dept} value={dept}>{dept}</option>
+          ))}
         </select>
       </div>
 
@@ -125,7 +136,9 @@ export default function EmployeesPage() {
               <div>
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
-                    <img src={u.avatar} alt={u.name} className="w-12 h-12 rounded-full object-cover border border-[#635BFF]" />
+                    <div className="w-12 h-12 rounded-full bg-[#1E6091] text-white text-sm font-bold flex items-center justify-center shrink-0 border border-[#1E6091] tracking-wider">
+                      {getInitials(u.name)}
+                    </div>
                     <div>
                       <h3
                         onClick={() => setActiveProfile(u)}
@@ -209,7 +222,9 @@ export default function EmployeesPage() {
             </div>
 
             <div className="flex items-center gap-4 mb-4">
-              <img src={activeProfile.avatar} alt={activeProfile.name} className="w-16 h-16 rounded-full object-cover border-2 border-[#635BFF]" />
+              <div className="w-16 h-16 rounded-full bg-[#1E6091] text-white text-base font-bold flex items-center justify-center shrink-0 border-2 border-[#1E6091] tracking-wider">
+                {getInitials(activeProfile.name)}
+              </div>
               <div>
                 <h3 className="font-bold text-base text-[var(--text-main)]">{activeProfile.name}</h3>
                 <p className="text-xs text-[#635BFF] font-semibold">{activeProfile.designation}</p>
@@ -251,10 +266,20 @@ export default function EmployeesPage() {
               <h3 className="font-bold text-base text-[var(--text-main)]">
                 {editingUser ? 'Edit Employee' : 'Add Employee'}
               </h3>
-              <button onClick={() => setModalOpen(false)} className="p-1 text-[var(--text-sec)] hover:bg-[var(--bg-main)] rounded cursor-pointer">
+              <button
+                disabled={isSubmitting}
+                onClick={() => setModalOpen(false)}
+                className="p-1 text-[var(--text-sec)] hover:bg-[var(--bg-main)] rounded cursor-pointer disabled:opacity-50"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
+
+            {submitError && (
+              <div className="mb-4 p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs">
+                {submitError}
+              </div>
+            )}
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
@@ -298,12 +323,9 @@ export default function EmployeesPage() {
                     onChange={(e) => setFormData({ ...formData, department: e.target.value })}
                     className="w-full px-2.5 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
                   >
-                    <option value="Executive">Executive</option>
-                    <option value="Product Delivery">Product Delivery</option>
-                    <option value="Frontend Core">Frontend Core</option>
-                    <option value="DevOps & Infrastructure">DevOps & Infrastructure</option>
-                    <option value="Design Studio">Design Studio</option>
-                    <option value="Quality Assurance">Quality Assurance</option>
+                    {DEPARTMENTS.map((dept) => (
+                      <option key={dept} value={dept}>{dept}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -338,16 +360,25 @@ export default function EmployeesPage() {
               <div className="pt-3 border-t border-[var(--border)] flex justify-end gap-2">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setModalOpen(false)}
-                  className="px-4 py-2 text-xs text-[var(--text-sec)] hover:bg-[var(--bg-main)] rounded-lg cursor-pointer"
+                  className="px-4 py-2 text-xs text-[var(--text-sec)] hover:bg-[var(--bg-main)] rounded-lg cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs bg-[#635BFF] hover:bg-[#4942D9] text-white font-semibold rounded-lg shadow-xs cursor-pointer"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 text-xs bg-[#635BFF] hover:bg-[#4942D9] text-white font-semibold rounded-lg shadow-xs cursor-pointer disabled:opacity-70 flex items-center gap-2"
                 >
-                  Save Employee
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>Save Employee</span>
+                  )}
                 </button>
               </div>
             </form>

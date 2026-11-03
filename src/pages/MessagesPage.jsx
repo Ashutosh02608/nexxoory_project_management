@@ -1,40 +1,39 @@
 import React, { useState } from 'react';
 import { MessageSquare, Send, Paperclip, Smile, MoreVertical, Hash, User } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { StorageService } from '../services/storageService';
+import { getInitials } from '../utils/avatar';
+import { ConversationsAPI } from '../services/api';
 
 export default function MessagesPage() {
   const { conversations, currentUser } = useApp();
 
-  const [activeConvId, setActiveConvId] = useState(conversations[0]?.id || 'conv-1');
-  const [messages, setMessages] = useState(() => StorageService.getMessages(activeConvId));
+  const [activeConvId, setActiveConvId] = useState(conversations[0]?.id || '');
+  const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
 
   const activeConv = conversations.find(c => c.id === activeConvId);
 
   const handleSelectConv = (id) => {
     setActiveConvId(id);
-    setMessages(StorageService.getMessages(id));
   };
 
-  const handleSendMessage = (e) => {
+  const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || !activeConvId) return;
 
-    const newMsg = StorageService.sendMessage(activeConvId, {
-      senderId: currentUser.id,
-      senderName: currentUser.name,
-      senderAvatar: currentUser.avatar,
-      text: inputText
-    });
-
-    setMessages([...messages, newMsg]);
-    setInputText('');
+    try {
+      const newMsg = await ConversationsAPI.sendMessage(activeConvId, inputText);
+      if (newMsg) {
+        setMessages(prev => [...prev, newMsg]);
+        setInputText('');
+      }
+    } catch (err) {
+      console.error('Failed to send message:', err);
+    }
   };
 
   const handleAddReaction = (msgId, emoji) => {
-    StorageService.toggleReaction(activeConvId, msgId, emoji);
-    setMessages(StorageService.getMessages(activeConvId));
+    // Local presentation placeholder
   };
 
   return (
@@ -101,7 +100,9 @@ export default function MessagesPage() {
             const isMe = m.senderId === currentUser.id;
             return (
               <div key={m.id} className={`flex items-start gap-3 ${isMe ? 'flex-row-reverse' : ''}`}>
-                <img src={m.senderAvatar} alt={m.senderName} className="w-8 h-8 rounded-full object-cover shrink-0" />
+                <div className="w-8 h-8 rounded-full bg-[#1E6091] text-white text-xs font-bold flex items-center justify-center shrink-0 tracking-wider">
+                  {getInitials(m.senderName)}
+                </div>
                 <div className={`max-w-md ${isMe ? 'items-end' : ''}`}>
                   <div className={`flex items-center gap-2 mb-1 ${isMe ? 'justify-end' : ''}`}>
                     <span className="text-xs font-semibold text-[var(--text-main)]">{m.senderName}</span>

@@ -4,12 +4,13 @@ import { useApp } from '../context/AppContext';
 
 export default function NotificationsPage() {
   const { notifications, markNotificationRead, markAllNotificationsRead, removeNotification } = useApp();
-  const [filter, setFilter] = useState('ALL'); // 'ALL', 'UNREAD', 'TASK', 'PROJECT'
+  const [filter, setFilter] = useState('ALL'); // 'ALL', 'UNREAD', 'TASK', 'PROJECT', 'ANNOUNCEMENT'
 
   const filtered = notifications.filter(n => {
     if (filter === 'UNREAD') return !n.read;
     if (filter === 'TASK') return n.type === 'task';
     if (filter === 'PROJECT') return n.type === 'project';
+    if (filter === 'ANNOUNCEMENT') return n.type === 'announcement';
     return true;
   });
 
@@ -35,7 +36,7 @@ export default function NotificationsPage() {
 
       {/* Filters */}
       <div className="flex gap-2">
-        {['ALL', 'UNREAD', 'TASK', 'PROJECT'].map(f => (
+        {['ALL', 'UNREAD', 'TASK', 'PROJECT', 'ANNOUNCEMENT'].map(f => (
           <button
             key={f}
             onClick={() => setFilter(f)}

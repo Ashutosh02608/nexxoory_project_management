@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { Users2, Plus, Edit2, Trash2, FolderKanban, ListTodo, X, Shield, ArrowRight } from 'lucide-react';
+import { Users2, Plus, Edit2, Trash2, FolderKanban, ListTodo, X, Shield, ArrowRight, Loader2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { getInitials } from '../utils/avatar';
+import { DEPARTMENTS, DEFAULT_DEPARTMENT } from '../constants/departments';
 
 export default function TeamsPage() {
   const { teams, updateTeam, removeTeam, users, projects, tasks, permissions } = useApp();
@@ -8,11 +10,13 @@ export default function TeamsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState(null);
   const [activeTeamDetail, setActiveTeamDetail] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   // Form state
   const [formData, setFormData] = useState({
     name: '',
-    department: 'Frontend Core',
+    department: DEFAULT_DEPARTMENT,
     leaderId: '',
     description: '',
     memberIds: [],
@@ -21,9 +25,10 @@ export default function TeamsPage() {
 
   const openCreateModal = () => {
     setEditingTeam(null);
+    setSubmitError('');
     setFormData({
       name: '',
-      department: 'Frontend Core',
+      department: DEFAULT_DEPARTMENT,
       leaderId: users[0]?.id || '',
       description: 'Agile team executing modern modular architectures.',
       memberIds: [users[0]?.id || ''],
@@ -34,6 +39,7 @@ export default function TeamsPage() {
 
   const openEditModal = (t) => {
     setEditingTeam(t);
+    setSubmitError('');
     setFormData({
       name: t.name,
       department: t.department,
@@ -45,14 +51,22 @@ export default function TeamsPage() {
     setModalOpen(true);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    updateTeam({
-      ...formData,
-      id: editingTeam ? editingTeam.id : undefined,
-      projectIds: editingTeam ? editingTeam.projectIds : []
-    });
-    setModalOpen(false);
+    setIsSubmitting(true);
+    setSubmitError('');
+    try {
+      await updateTeam({
+        ...formData,
+        id: editingTeam ? editingTeam.id : undefined,
+        projectIds: editingTeam ? editingTeam.projectIds : []
+      });
+      setModalOpen(false);
+    } catch (err) {
+      setSubmitError(err.message || 'Failed to save squad');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const toggleMemberSelection = (userId) => {
@@ -87,8 +101,24 @@ export default function TeamsPage() {
       </div>
 
       {/* Team Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {teams.map(team => {
+      {teams.length === 0 ? (
+        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-12 text-center">
+          <Users2 className="w-10 h-10 text-[var(--text-sec)] mx-auto mb-3 opacity-40" />
+          <h3 className="font-bold text-sm text-[var(--text-main)]">No teams configured</h3>
+          <p className="text-xs text-[var(--text-sec)] mt-1 mb-4">Organize staff into high-velocity functional squads.</p>
+          {permissions.canManageTeams && (
+            <button
+              onClick={openCreateModal}
+              className="inline-flex items-center gap-2 bg-[#635BFF] hover:bg-[#4942D9] text-white text-xs font-semibold px-4 py-2 rounded-xl transition-colors cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Form Team</span>
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {teams.map(team => {
           const leader = users.find(u => u.id === team.leaderId);
           const memberList = users.filter(u => team.memberIds?.includes(u.id));
           const teamTasks = tasks.filter(t => t.teamId === team.id);
@@ -138,7 +168,9 @@ export default function TeamsPage() {
                 {/* Team Leader Badge */}
                 {leader && (
                   <div className="mt-4 p-2.5 rounded-xl bg-[var(--bg-main)] border border-[var(--border)] flex items-center gap-2.5">
-                    <img src={leader.avatar} alt={leader.name} className="w-7 h-7 rounded-full object-cover border border-[#635BFF]" />
+                    <div className="w-7 h-7 rounded-full bg-[#1E6091] text-white text-[10px] font-bold flex items-center justify-center shrink-0 border border-[#1E6091] tracking-wider">
+                      {getInitials(leader.name)}
+                    </div>
                     <div className="overflow-hidden text-xs">
                       <span className="text-[10px] text-[var(--text-sec)] block leading-none">Team Leader</span>
                       <span className="font-semibold text-[var(--text-main)] truncate">{leader.name}</span>
@@ -163,13 +195,13 @@ export default function TeamsPage() {
               <div className="mt-4 pt-3 border-t border-[var(--border)] flex items-center justify-between">
                 <div className="flex -space-x-2 overflow-hidden">
                   {memberList.slice(0, 4).map(m => (
-                    <img
+                    <div
                       key={m.id}
-                      src={m.avatar}
-                      alt={m.name}
                       title={m.name}
-                      className="inline-block h-6 w-6 rounded-full ring-2 ring-[var(--surface)] object-cover"
-                    />
+                      className="inline-flex items-center justify-center h-6 w-6 rounded-full bg-[#1E6091] text-white text-[9px] font-bold ring-2 ring-[var(--surface)] tracking-wider"
+                    >
+                      {getInitials(m.name)}
+                    </div>
                   ))}
                   {memberList.length > 4 && (
                     <span className="flex items-center justify-center w-6 h-6 rounded-full bg-[var(--bg-main)] border border-[var(--border)] text-[9px] font-bold text-[var(--text-sec)]">
@@ -189,6 +221,7 @@ export default function TeamsPage() {
           );
         })}
       </div>
+      )}
 
       {/* Team Details Modal */}
       {activeTeamDetail && (
@@ -213,7 +246,9 @@ export default function TeamsPage() {
                   {users.filter(u => activeTeamDetail.memberIds?.includes(u.id)).map(u => (
                     <div key={u.id} className="flex items-center justify-between p-2 rounded-lg bg-[var(--bg-main)] text-xs">
                       <div className="flex items-center gap-2">
-                        <img src={u.avatar} alt={u.name} className="w-6 h-6 rounded-full object-cover" />
+                        <div className="w-6 h-6 rounded-full bg-[#1E6091] text-white text-[9px] font-bold flex items-center justify-center shrink-0 tracking-wider">
+                          {getInitials(u.name)}
+                        </div>
                         <div>
                           <p className="font-semibold text-[var(--text-main)]">{u.name}</p>
                           <p className="text-[10px] text-[var(--text-sec)]">{u.designation}</p>
@@ -224,6 +259,36 @@ export default function TeamsPage() {
                       )}
                     </div>
                   ))}
+                </div>
+              </div>
+
+              {/* Team Assigned Tasks */}
+              <div>
+                <h4 className="text-xs font-bold text-[var(--text-main)] mb-2">
+                  Assigned Team Tasks ({tasks.filter(t => t.teamId === activeTeamDetail.id).length})
+                </h4>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                  {tasks.filter(t => t.teamId === activeTeamDetail.id).length === 0 ? (
+                    <p className="text-xs text-[var(--text-sec)]">No tasks assigned to this team.</p>
+                  ) : (
+                    tasks.filter(t => t.teamId === activeTeamDetail.id).map(tk => (
+                      <div key={tk.id} className="flex items-center justify-between p-2 rounded-lg bg-[var(--bg-main)] border border-[var(--border)] text-xs">
+                        <div>
+                          <p className="font-semibold text-[var(--text-main)]">{tk.title}</p>
+                          <p className="text-[10px] text-[var(--text-sec)]">
+                            {tk.assigneeId ? `Assignee: ${users.find(u => u.id === tk.assigneeId)?.name || 'Member'}` : 'Entire Squad'} • Due: {tk.dueDate}
+                          </p>
+                        </div>
+                        <span className={`text-[9px] px-2 py-0.5 rounded font-bold ${
+                          tk.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-500' :
+                          tk.status === 'In Progress' ? 'bg-[#635BFF]/10 text-[#635BFF]' :
+                          'bg-amber-500/10 text-amber-500'
+                        }`}>
+                          {tk.status}
+                        </span>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -273,10 +338,9 @@ export default function TeamsPage() {
                     onChange={(e) => setFormData({ ...formData, department: e.target.value })}
                     className="w-full px-2.5 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
                   >
-                    <option value="Frontend Core">Frontend Core</option>
-                    <option value="DevOps & Infrastructure">DevOps & Infrastructure</option>
-                    <option value="Design Studio">Design Studio</option>
-                    <option value="Product Delivery">Product Delivery</option>
+                    {DEPARTMENTS.map((dept) => (
+                      <option key={dept} value={dept}>{dept}</option>
+                    ))}
                   </select>
                 </div>
                 <div>
@@ -321,16 +385,25 @@ export default function TeamsPage() {
               <div className="pt-3 border-t border-[var(--border)] flex justify-end gap-2">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setModalOpen(false)}
-                  className="px-4 py-2 text-xs text-[var(--text-sec)] hover:bg-[var(--bg-main)] rounded-lg cursor-pointer"
+                  className="px-4 py-2 text-xs text-[var(--text-sec)] hover:bg-[var(--bg-main)] rounded-lg cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs bg-[#635BFF] hover:bg-[#4942D9] text-white font-semibold rounded-lg shadow-xs cursor-pointer"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 text-xs bg-[#635BFF] hover:bg-[#4942D9] text-white font-semibold rounded-lg shadow-xs cursor-pointer disabled:opacity-70 flex items-center gap-2"
                 >
-                  Save Squad
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>Save Squad</span>
+                  )}
                 </button>
               </div>
             </form>

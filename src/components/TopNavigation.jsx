@@ -9,19 +9,21 @@ import {
   UserCheck,
   CheckCircle2,
   Trash2,
-  Clock
+  Clock,
+  LogOut,
+  User
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { useNavigate } from 'react-router-dom';
 import logoImg from '../assets/nexxoory_logo.webp';
+import { getInitials } from '../utils/avatar';
 
 export default function TopNavigation() {
   const {
     theme,
     toggleTheme,
     currentUser,
-    users,
-    switchUser,
+    logout,
     notifications,
     markNotificationRead,
     markAllNotificationsRead,
@@ -31,10 +33,16 @@ export default function TopNavigation() {
   } = useApp();
 
   const navigate = useNavigate();
-  const [roleDropdownOpen, setRoleDropdownOpen] = useState(false);
+  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
 
   const unreadCount = notifications.filter(n => !n.read).length;
+
+  const handleLogout = () => {
+    setProfileDropdownOpen(false);
+    logout();
+    navigate('/login');
+  };
 
   return (
     <header className="h-18 border-b border-[var(--border)] bg-[var(--surface)] px-6 flex items-center justify-between sticky top-0 z-30 transition-colors">
@@ -56,14 +64,16 @@ export default function TopNavigation() {
 
       {/* Action controls */}
       <div className="flex items-center gap-3">
-        {/* Quick create action */}
-        <button
-          onClick={() => setQuickCreateOpen(true)}
-          className="flex items-center gap-2 bg-[#1E6091] hover:bg-[#143A52] text-white text-xs font-bold px-3.5 py-2 rounded-xl shadow-xs transition-all cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          <span className="hidden sm:inline">Create New</span>
-        </button>
+        {/* Quick create action (Admin & PM only) */}
+        {(currentUser?.role === 'admin' || currentUser?.role === 'project_manager') && (
+          <button
+            onClick={() => setQuickCreateOpen(true)}
+            className="flex items-center gap-2 bg-[#1E6091] hover:bg-[#143A52] text-white text-xs font-bold px-3.5 py-2 rounded-xl shadow-xs transition-all cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">Create New</span>
+          </button>
+        )}
 
         {/* Theme switch button */}
         <button
@@ -173,52 +183,56 @@ export default function TopNavigation() {
           )}
         </div>
 
-        {/* Demo Switch User Role Dropdown */}
-        <div className="relative">
-          <button
-            onClick={() => setRoleDropdownOpen(!roleDropdownOpen)}
-            className="flex items-center gap-2.5 p-1.5 pl-2.5 border border-[var(--border)] rounded-xl hover:bg-[var(--bg-main)] transition-colors cursor-pointer"
-          >
-            <img
-              src={currentUser.avatar}
-              alt={currentUser.name}
-              className="w-7 h-7 rounded-full object-cover border border-[#1E6091]"
-            />
-            <div className="text-left hidden md:block">
-              <p className="text-xs font-bold leading-tight text-[var(--text-main)]">{currentUser.name}</p>
-              <p className="text-[10px] text-[#1E6091] dark:text-[#38BDF8] font-bold capitalize">{currentUser.role.replace('_', ' ')}</p>
-            </div>
-            <ChevronDown className="w-3.5 h-3.5 text-[var(--text-sec)]" />
-          </button>
+        {/* User Profile & Logout Dropdown */}
+        {currentUser && (
+          <div className="relative">
+            <button
+              onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
+              className="flex items-center gap-2.5 p-1.5 pl-2.5 border border-[var(--border)] rounded-xl hover:bg-[var(--bg-main)] transition-colors cursor-pointer"
+            >
+              <div className="w-7 h-7 rounded-full bg-[#1E6091] text-white text-[11px] font-bold flex items-center justify-center shrink-0 tracking-wider">
+                {getInitials(currentUser.name)}
+              </div>
+              <div className="text-left hidden md:block">
+                <p className="text-xs font-bold leading-tight text-[var(--text-main)]">{currentUser.name}</p>
+                <p className="text-[10px] text-[#1E6091] dark:text-[#38BDF8] font-bold capitalize">
+                  {currentUser.role?.replace('_', ' ')}
+                </p>
+              </div>
+              <ChevronDown className="w-3.5 h-3.5 text-[var(--text-sec)]" />
+            </button>
 
-          {roleDropdownOpen && (
-            <div className="absolute right-0 mt-2 w-64 bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-xl z-50 p-2">
-              <div className="px-3 py-2 border-b border-[var(--border)] mb-1">
-                <p className="text-[10px] uppercase font-bold text-[var(--text-sec)] tracking-wider">Demo Role Switcher</p>
-                <p className="text-xs text-[var(--text-sec)]">Simulate role-based views:</p>
-              </div>
-              <div className="space-y-1">
-                {users.slice(0, 3).map(u => (
+            {profileDropdownOpen && (
+              <div className="absolute right-0 mt-2 w-56 bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-xl z-50 p-2">
+                <div className="px-3 py-2 border-b border-[var(--border)] mb-1">
+                  <p className="text-xs font-bold text-[var(--text-main)] truncate">{currentUser.name}</p>
+                  <p className="text-[10px] text-[var(--text-sec)] truncate">{currentUser.email}</p>
+                </div>
+
+                <div className="space-y-1">
                   <button
-                    key={u.id}
                     onClick={() => {
-                      switchUser(u.id);
-                      setRoleDropdownOpen(false);
+                      navigate('/settings');
+                      setProfileDropdownOpen(false);
                     }}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left text-xs transition-colors cursor-pointer ${u.id === currentUser.id ? 'bg-[#1E6091]/10 text-[#1E6091] dark:text-[#38BDF8] font-bold' : 'hover:bg-[var(--bg-main)] text-[var(--text-main)]'}`}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs text-[var(--text-main)] hover:bg-[var(--bg-main)] cursor-pointer"
                   >
-                    <img src={u.avatar} alt={u.name} className="w-6 h-6 rounded-full object-cover" />
-                    <div className="flex-1 overflow-hidden">
-                      <p className="truncate font-semibold">{u.name}</p>
-                      <p className="text-[10px] text-[var(--text-sec)] capitalize">{u.role.replace('_', ' ')}</p>
-                    </div>
-                    {u.id === currentUser.id && <UserCheck className="w-4 h-4 text-[#1E6091]" />}
+                    <User className="w-3.5 h-3.5 text-[var(--text-sec)]" />
+                    <span>Account Settings</span>
                   </button>
-                ))}
+
+                  <button
+                    onClick={handleLogout}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs text-rose-500 hover:bg-rose-500/10 cursor-pointer font-semibold"
+                  >
+                    <LogOut className="w-3.5 h-3.5 text-rose-500" />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
     </header>
   );

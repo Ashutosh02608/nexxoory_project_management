@@ -185,7 +185,7 @@ export async function seedDatabase() {
   console.log('=== Nexxoory Database Seeding ===');
   verifySeedPreconditions();
 
-  const DEMO_PASSWORD = 'Password123!';
+  const DEMO_PASSWORD = 'admin123';
   const passwordHash = await argon2.hash(DEMO_PASSWORD, {
     type: argon2.argon2id,
     memoryCost: 2 ** 16,
