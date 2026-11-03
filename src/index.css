@@ -1,0 +1,123 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --primary: #1E6091;
+    --primary-dark: #143A52;
+    --primary-light: #52B69A;
+    --primary-accent: #34A0A4;
+    --bg-main: #F4F7FB;
+    --surface: #FFFFFF;
+    --text-main: #0B192C;
+    --text-sec: #536B82;
+    --border: #E2E8F0;
+    --success: #16A36A;
+    --warning: #E9A23B;
+    --danger: #E05252;
+  }
+
+  .dark {
+    --bg-main: #0B131F;
+    --surface: #141E2E;
+    --text-main: #F1F5F9;
+    --text-sec: #94A3B8;
+    --border: #1E2D42;
+    --primary: #38BDF8;
+    --primary-dark: #0284C7;
+  }
+}
+
+/* Custom background animation keyframes */
+@keyframes pulse-slow {
+  0%, 100% {
+    transform: scale(1) translate(0px, 0px);
+    opacity: 0.22;
+  }
+  50% {
+    transform: scale(1.15) translate(20px, -20px);
+    opacity: 0.38;
+  }
+}
+
+@keyframes pulse-reverse {
+  0%, 100% {
+    transform: scale(1) translate(0px, 0px);
+    opacity: 0.18;
+  }
+  50% {
+    transform: scale(1.12) translate(-25px, 20px);
+    opacity: 0.32;
+  }
+}
+
+@keyframes orbit-cw {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+
+@keyframes orbit-ccw {
+  from {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+}
+
+@keyframes grid-drift {
+  0% {
+    background-position: 0px 0px;
+  }
+  100% {
+    background-position: 48px 48px;
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 14s ease-in-out infinite;
+}
+
+.animate-pulse-reverse {
+  animation: pulse-reverse 18s ease-in-out infinite;
+}
+
+.animate-orbit-cw {
+  animation: orbit-cw 80s linear infinite;
+}
+
+.animate-orbit-ccw {
+  animation: orbit-ccw 110s linear infinite;
+}
+
+.animate-grid-drift {
+  animation: grid-drift 30s linear infinite;
+}
+
+body {
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(82, 107, 130, 0.25);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(82, 107, 130, 0.45);
+}

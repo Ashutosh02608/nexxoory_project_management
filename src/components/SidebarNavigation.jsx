@@ -1,0 +1,149 @@
+import React, { useState } from 'react';
+import { NavLink } from 'react-router-dom';
+import {
+  LayoutDashboard,
+  CheckSquare,
+  FolderKanban,
+  ListTodo,
+  Users2,
+  UserCircle2,
+  CalendarDays,
+  GanttChartSquare,
+  FolderArchive,
+  MessageSquare,
+  BarChart3,
+  Bell,
+  Settings,
+  ChevronLeft,
+  ChevronRight,
+  ShieldCheck,
+  RotateCcw
+} from 'lucide-react';
+import { useApp } from '../context/AppContext';
+import logoImg from '../assets/nexxoory_logo.webp';
+
+export default function SidebarNavigation() {
+  const [collapsed, setCollapsed] = useState(false);
+  const { currentUser, resetToInitialData } = useApp();
+
+  const navItems = [
+    { label: 'Dashboard', path: '/', icon: LayoutDashboard },
+    { label: 'My Work', path: '/my-work', icon: CheckSquare },
+    { label: 'Projects', path: '/projects', icon: FolderKanban },
+    { label: 'Tasks', path: '/tasks', icon: ListTodo },
+    { label: 'Teams', path: '/teams', icon: Users2 },
+    { label: 'Employees', path: '/employees', icon: UserCircle2 },
+    { label: 'Calendar', path: '/calendar', icon: CalendarDays },
+    { label: 'Timeline', path: '/timeline', icon: GanttChartSquare },
+    { label: 'Documents', path: '/documents', icon: FolderArchive },
+    { label: 'Messages', path: '/messages', icon: MessageSquare },
+    { label: 'Reports', path: '/reports', icon: BarChart3 },
+    { label: 'Notifications', path: '/notifications', icon: Bell },
+    { label: 'Settings', path: '/settings', icon: Settings },
+  ];
+
+  return (
+    <aside
+      className={`border-r border-[var(--border)] bg-[var(--surface)] transition-all duration-300 flex flex-col justify-between select-none relative z-20 ${
+        collapsed ? 'w-24' : 'w-72'
+      }`}
+    >
+      <div>
+        {/* Spotlight Shadow Header */}
+        <div className="relative border-b border-[var(--border)] bg-gradient-to-b from-[var(--bg-main)] to-[var(--surface)] p-4 flex flex-col items-center overflow-hidden">
+          {/* Subtle Ambient Radial Glow */}
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-[#1E6091]/15 via-transparent to-transparent pointer-events-none" />
+
+          <button
+            onClick={() => setCollapsed(!collapsed)}
+            aria-label="Toggle sidebar width"
+            className="absolute top-3 right-3 p-1.5 rounded-lg border border-[var(--border)] text-[var(--text-sec)] hover:bg-[var(--surface)] transition-colors cursor-pointer shadow-xs z-10"
+          >
+            {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+          </button>
+
+          {!collapsed ? (
+            <div className="w-full flex items-center justify-center py-2 relative z-10">
+              {/* Outer box with multi-layer spotlight glow & shadow */}
+              <div className="relative group">
+                <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-[#1E6091] via-[#52B69A] to-[#34A0A4] opacity-35 blur-md group-hover:opacity-60 transition duration-500" />
+                <div className="relative p-3 rounded-2xl bg-[var(--surface)] border border-[var(--border)] shadow-[0_10px_25px_-5px_rgba(30,96,145,0.35),0_8px_10px_-6px_rgba(30,96,145,0.2)]">
+                  <img
+                    src={logoImg}
+                    alt="Logo"
+                    className="h-24 w-auto max-w-[220px] object-contain drop-shadow"
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="py-2 relative z-10">
+              <div className="relative group">
+                <div className="absolute -inset-0.5 rounded-xl bg-gradient-to-r from-[#1E6091] to-[#52B69A] opacity-30 blur-sm group-hover:opacity-50 transition" />
+                <div className="relative p-1.5 rounded-xl bg-[var(--surface)] border border-[var(--border)] shadow-[0_4px_14px_rgba(30,96,145,0.3)]">
+                  <img
+                    src={logoImg}
+                    alt="Logo"
+                    className="h-12 w-auto object-contain"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Navigation items */}
+        <nav className="p-3 space-y-1.5 overflow-y-auto max-h-[calc(100vh-17rem)]">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                title={collapsed ? item.label : undefined}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-150 ${
+                    isActive
+                      ? 'bg-[#1E6091] text-white shadow-md shadow-[#1E6091]/25 font-bold'
+                      : 'text-[var(--text-sec)] hover:text-[var(--text-main)] hover:bg-[var(--bg-main)]'
+                  } ${collapsed ? 'justify-center px-0' : ''}`
+                }
+              >
+                <Icon className="w-4 h-4 shrink-0" />
+                {!collapsed && <span className="truncate">{item.label}</span>}
+              </NavLink>
+            );
+          })}
+        </nav>
+      </div>
+
+      {/* Role indicator footer & demo reset */}
+      <div className="p-3 border-t border-[var(--border)] space-y-2">
+        {!collapsed && (
+          <div className="p-2.5 rounded-xl bg-[var(--bg-main)] border border-[var(--border)] flex items-center gap-2.5">
+            <ShieldCheck className="w-4 h-4 text-[#1E6091] dark:text-[#38BDF8] shrink-0" />
+            <div className="overflow-hidden">
+              <p className="text-[11px] font-semibold text-[var(--text-main)] truncate">Mode: {currentUser.role.replace('_', ' ')}</p>
+              <p className="text-[9px] text-[var(--text-sec)]">Frontend demo active</p>
+            </div>
+          </div>
+        )}
+
+        <button
+          onClick={() => {
+            if (window.confirm('Reset all mock data back to factory defaults?')) {
+              resetToInitialData();
+            }
+          }}
+          title="Reset demo data"
+          className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium text-[var(--text-sec)] hover:text-[#E05252] hover:bg-rose-500/10 border border-transparent hover:border-[#E05252]/20 transition-all cursor-pointer ${
+            collapsed ? 'justify-center px-0' : ''
+          }`}
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+          {!collapsed && <span>Reset Mock Data</span>}
+        </button>
+      </div>
+    </aside>
+  );
+}
