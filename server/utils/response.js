@@ -30,11 +30,18 @@ export function sendError(res, statusCode, code, message, details = undefined) {
 export function handleCors(req, res) {
   const origin = req.headers.origin;
   
-  // Whitelist resolution: in production, strictly match FRONTEND_URL.
-  // In development, allow configured ALLOWED_ORIGINS (e.g. localhost:5173, 127.0.0.1:5173).
-  const isAllowedOrigin = env.isProduction
-    ? origin === env.FRONTEND_URL
-    : env.ALLOWED_ORIGINS.includes(origin) || origin === env.FRONTEND_URL;
+  // Whitelist resolution:
+  // Allow same-origin, Vercel deployments (*.vercel.app), localhost, or configured FRONTEND_URL/ALLOWED_ORIGINS
+  let isAllowedOrigin = false;
+  if (!origin) {
+    isAllowedOrigin = true;
+  } else if (origin === env.FRONTEND_URL || env.ALLOWED_ORIGINS.includes(origin)) {
+    isAllowedOrigin = true;
+  } else if (origin.endsWith('.vercel.app')) {
+    isAllowedOrigin = true;
+  } else if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+    isAllowedOrigin = true;
+  }
 
   // Reject unauthorized origins for state-changing requests
   if (origin && !isAllowedOrigin) {
