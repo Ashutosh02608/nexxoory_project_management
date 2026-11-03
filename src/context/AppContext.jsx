@@ -151,10 +151,16 @@ export function AppProvider({ children }) {
   };
 
   const updateTask = async (task) => {
+    // Optimistic local update for instant UI feedback (zero lag on drag-and-drop)
     if (task.id) {
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, ...task } : t));
       await TasksAPI.update(task);
     } else {
-      await TasksAPI.create(task);
+      const created = await TasksAPI.create(task);
+      if (created) {
+        setTasks(prev => [created, ...prev]);
+        return created;
+      }
     }
     const updated = await TasksAPI.getAll();
     setTasks(updated);
