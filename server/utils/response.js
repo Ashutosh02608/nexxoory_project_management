@@ -85,9 +85,15 @@ export function validateCsrf(req, res) {
 
   const origin = req.headers.origin;
   if (origin) {
-    const isAllowed = env.isProduction
-      ? origin === env.FRONTEND_URL
-      : env.ALLOWED_ORIGINS.includes(origin) || origin === env.FRONTEND_URL;
+    let isAllowed = false;
+    if (origin === env.FRONTEND_URL || env.ALLOWED_ORIGINS.includes(origin)) {
+      isAllowed = true;
+    } else if (origin.endsWith('.vercel.app')) {
+      isAllowed = true;
+    } else if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+      isAllowed = true;
+    }
+
     if (!isAllowed) {
       sendError(res, 403, 'CSRF_ORIGIN_INVALID', 'Cross-origin request rejected');
       return false;
