@@ -52,12 +52,17 @@ export function getSslConfig(connectionString) {
  */
 export function getDbPool() {
   if (!pool) {
-    const connectionString = process.env.DATABASE_URL;
+    let connectionString = process.env.DATABASE_URL;
 
     if (!connectionString) {
       throw new Error(
         'DATABASE_URL environment variable is missing. Check your environment configuration.'
       );
+    }
+
+    // Modernize SSL query parameter to prevent pg-connection-string security deprecation warning
+    if (connectionString.includes('sslmode=require')) {
+      connectionString = connectionString.replace('sslmode=require', 'sslmode=verify-full');
     }
 
     const ssl = getSslConfig(connectionString);
