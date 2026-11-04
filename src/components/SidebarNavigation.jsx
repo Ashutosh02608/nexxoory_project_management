@@ -1,20 +1,29 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   ChevronLeft,
   ChevronRight,
-  ShieldCheck,
-  RotateCcw
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { useMessaging } from '../context/MessagingContext';
 import { getRoleNavigation } from '../config/rbac';
 import logoImg from '../assets/nexxoory_logo.webp';
 
 export default function SidebarNavigation() {
   const [collapsed, setCollapsed] = useState(false);
-  const { currentUser, resetToInitialData } = useApp();
+  const { currentUser } = useApp();
+  const messaging = useMessaging();
 
   const navItems = getRoleNavigation(currentUser?.role);
+
+  const msgUnread = useMemo(() => {
+    if (!messaging || !currentUser) return 0;
+    try {
+      const convs = messaging.getConversationsForUser(currentUser.id, currentUser.role);
+      return convs.reduce((sum, c) => sum + messaging.getUnreadCount(c.id, currentUser.id), 0);
+    } catch { return 0; }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messaging?.messages, currentUser?.id]);
 
   return (
     <aside
@@ -70,13 +79,14 @@ export default function SidebarNavigation() {
         <nav className="p-3 space-y-1.5 overflow-y-auto max-h-[calc(100vh-10rem)]">
           {navItems.map((item) => {
             const Icon = item.icon;
+            const isMessages = item.path === '/messages';
             return (
               <NavLink
                 key={item.path}
                 to={item.path}
                 title={collapsed ? item.label : undefined}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-150 ${
+                  `relative flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-150 ${
                     isActive
                       ? 'bg-[#1E6091] text-white shadow-md shadow-[#1E6091]/25 font-bold'
                       : 'text-[var(--text-sec)] hover:text-[var(--text-main)] hover:bg-[var(--bg-main)]'
@@ -85,6 +95,15 @@ export default function SidebarNavigation() {
               >
                 <Icon className="w-4 h-4 shrink-0" />
                 {!collapsed && <span className="truncate">{item.label}</span>}
+                {/* Unread badge */}
+                {isMessages && msgUnread > 0 && !collapsed && (
+                  <span className="ml-auto bg-[#635BFF] text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full min-w-[16px] text-center leading-none">
+                    {msgUnread > 99 ? '99+' : msgUnread}
+                  </span>
+                )}
+                {isMessages && msgUnread > 0 && collapsed && (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#635BFF] rounded-full" />
+                )}
               </NavLink>
             );
           })}

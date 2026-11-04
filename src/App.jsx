@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppProvider } from './context/AppContext';
+import { MessagingProvider } from './context/MessagingContext';
 
 // Layout
 import DashboardLayout from './components/DashboardLayout';
@@ -26,6 +27,7 @@ import LoginPage from './pages/LoginPage';
 export default function App() {
   return (
     <AppProvider>
+      <MessagingProvider>
       <BrowserRouter>
         <Routes>
           {/* Public Auth Route */}
@@ -52,6 +54,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
+      </MessagingProvider>
     </AppProvider>
   );
 }

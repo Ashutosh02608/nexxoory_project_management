@@ -269,6 +269,11 @@ export function AppProvider({ children }) {
     setNotifications(prev => prev.filter(n => n.id !== id));
   };
 
+  // Frontend-only: add a local notification (used by messaging layer)
+  const addLocalNotification = (notif) => {
+    setNotifications(prev => [notif, ...prev]);
+  };
+
   const publishAnnouncement = async (announcement) => {
     await AnnouncementsAPI.create(announcement);
     await refreshAppData();
@@ -347,6 +352,7 @@ export function AppProvider({ children }) {
         markNotificationRead,
         markAllNotificationsRead,
         removeNotification,
+        addLocalNotification,
         publishAnnouncement,
         removeAnnouncement,
         resetToInitialData,
