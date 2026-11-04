@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  Menu,
   Search,
   Plus,
   Bell,
@@ -29,7 +30,8 @@ export default function TopNavigation() {
     markAllNotificationsRead,
     removeNotification,
     setSearchOpen,
-    setQuickCreateOpen
+    setQuickCreateOpen,
+    setMobileMenuOpen
   } = useApp();
 
   const navigate = useNavigate();
@@ -45,19 +47,28 @@ export default function TopNavigation() {
   };
 
   return (
-    <header className="h-18 border-b border-[var(--border)] bg-[var(--surface)] px-6 flex items-center justify-between sticky top-0 z-30 transition-colors">
+    <header className="h-16 md:h-18 border-b border-[var(--border)] bg-[var(--surface)] px-3 sm:px-6 flex items-center justify-between sticky top-0 z-30 transition-colors">
       {/* Mobile / Responsive Brand Badge & Search */}
-      <div className="flex items-center gap-4 flex-1 max-w-xl">
-        <div className="md:hidden flex items-center gap-2">
-          <img src={logoImg} alt="Nexxoory" className="h-9 w-auto object-contain" />
+      <div className="flex items-center gap-2 sm:gap-4 flex-1 max-w-xl">
+        {/* Mobile Hamburger Drawer Trigger */}
+        <button
+          onClick={() => setMobileMenuOpen(true)}
+          aria-label="Open navigation menu"
+          className="md:hidden p-2 rounded-xl border border-[var(--border)] text-[var(--text-sec)] hover:bg-[var(--bg-main)] transition-colors cursor-pointer shrink-0"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+
+        <div className="md:hidden flex items-center gap-1 shrink-0">
+          <img src={logoImg} alt="Nexxoory" className="h-7 w-auto object-contain" />
         </div>
 
         <button
           onClick={() => setSearchOpen(true)}
-          className="flex items-center gap-3 px-3.5 py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-sec)] text-sm w-full max-w-md hover:border-[#1E6091] dark:hover:border-[#38BDF8] transition-all shadow-xs cursor-pointer text-left"
+          className="flex items-center gap-2 sm:gap-3 px-3 py-1.5 sm:py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-sec)] text-xs sm:text-sm w-full max-w-md hover:border-[#1E6091] dark:hover:border-[#38BDF8] transition-all shadow-xs cursor-pointer text-left"
         >
-          <Search className="w-4 h-4 text-[var(--text-sec)]" />
-          <span className="flex-1 text-xs">Search projects, tasks, employees...</span>
+          <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[var(--text-sec)] shrink-0" />
+          <span className="flex-1 truncate text-xs">Search projects, tasks, employees...</span>
           <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] bg-[var(--surface)] border border-[var(--border)] rounded font-mono">⌘K</kbd>
         </button>
       </div>

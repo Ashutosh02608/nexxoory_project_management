@@ -641,7 +641,8 @@ export default function DocumentsPage() {
           )}
         </div>
 
-        <table className="w-full text-left text-xs">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs min-w-[650px]">
           <thead className="bg-[var(--bg-main)] border-b border-[var(--border)] text-[var(--text-sec)] uppercase font-semibold text-[10px]">
             <tr>
               <th className="py-3 px-4">Document Name</th>
@@ -751,6 +752,7 @@ export default function DocumentsPage() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* ACCESS MANAGEMENT MODAL (ADMIN ONLY) */}

@@ -208,7 +208,7 @@ export function MessagingProvider({ children }) {
     const poll = () => {
       if (document.visibilityState === 'visible' && navigator.onLine) syncMessages();
     };
-    const timer = window.setInterval(poll, 1000);
+    const timer = window.setInterval(poll, 4000);
     const onVisible = () => {
       if (document.visibilityState === 'visible' && navigator.onLine) syncMessages();
     };

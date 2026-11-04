@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   FolderKanban,
   Search,
@@ -23,10 +24,11 @@ import { ScopeRules } from '../config/rbac';
 
 export default function ProjectsPage() {
   const { projects, updateProject, removeProject, users, teams, currentUser, permissions } = useApp();
+  const [searchParams] = useSearchParams();
 
   const [viewMode, setViewMode] = useState('grid'); // 'grid', 'list', 'table'
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState(() => searchParams.get('status') || 'ALL');
   const [priorityFilter, setPriorityFilter] = useState('ALL');
 
   // Modal states
@@ -35,6 +37,19 @@ export default function ProjectsPage() {
   const [detailsProject, setDetailsProject] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+
+  // Synchronize URL search params
+  useEffect(() => {
+    const statusParam = searchParams.get('status');
+    if (statusParam) {
+      setStatusFilter(statusParam);
+    }
+    const projectIdParam = searchParams.get('projectId');
+    if (projectIdParam && projects.length > 0) {
+      const match = projects.find(p => p.id === projectIdParam);
+      if (match) setDetailsProject(match);
+    }
+  }, [searchParams, projects]);
 
   // Form state
   const [formData, setFormData] = useState({

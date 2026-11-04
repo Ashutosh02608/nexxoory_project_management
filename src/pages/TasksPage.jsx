@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   ListTodo,
   Plus,
@@ -32,11 +33,13 @@ const COLUMNS = [
 
 export default function TasksPage() {
   const { tasks, updateTask, removeTask, projects, users, teams, currentUser, permissions } = useApp();
+  const [searchParams] = useSearchParams();
 
   const [viewMode, setViewMode] = useState('kanban'); // 'kanban', 'list', 'table'
   const [search, setSearch] = useState('');
   const [projectFilter, setProjectFilter] = useState('ALL');
   const [priorityFilter, setPriorityFilter] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState(() => searchParams.get('status') || 'ALL');
 
   // Modal / Drawer state
   const [modalOpen, setModalOpen] = useState(false);
@@ -45,6 +48,19 @@ export default function TasksPage() {
   const [commentInput, setCommentInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+
+  // Handle URL params
+  useEffect(() => {
+    const sParam = searchParams.get('status');
+    if (sParam) {
+      setStatusFilter(sParam);
+    }
+    const tIdParam = searchParams.get('taskId');
+    if (tIdParam && tasks.length > 0) {
+      const match = tasks.find(t => t.id === tIdParam);
+      if (match) setActiveTaskDrawer(match);
+    }
+  }, [searchParams, tasks]);
 
   // Form state & Flexible Assignment Mode ('employee', 'team', 'member')
   const [assignmentMode, setAssignmentMode] = useState('employee');
@@ -212,7 +228,8 @@ export default function TasksPage() {
         ? !t.projectId
         : t.projectId === projectFilter;
     const matchesPriority = priorityFilter === 'ALL' || t.priority === priorityFilter;
-    return matchesSearch && matchesProject && matchesPriority;
+    const matchesStatus = statusFilter === 'ALL' || t.status === statusFilter;
+    return matchesSearch && matchesProject && matchesPriority && matchesStatus;
   });
 
   return (
@@ -266,6 +283,18 @@ export default function TasksPage() {
             <option value="UNPLANNED">Unplanned Tasks</option>
             {projects.map(p => (
               <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+
+          {/* Status filter */}
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="text-xs px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
+          >
+            <option value="ALL">All Statuses</option>
+            {COLUMNS.map(c => (
+              <option key={c.id} value={c.id}>{c.label}</option>
             ))}
           </select>
 

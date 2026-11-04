@@ -17,6 +17,27 @@ import {
 import { autoSyncBus, SYNC_EVENTS } from '../services/autoSync';
 import { playNotificationChime } from '../utils/soundEffects';
 
+const CACHE_KEY_PREFIX = 'nx_app_data_cache_';
+
+function getAppCache(userId) {
+  if (!userId) return null;
+  try {
+    const raw = localStorage.getItem(`${CACHE_KEY_PREFIX}${userId}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAppCache(userId, data) {
+  if (!userId || !data) return;
+  try {
+    localStorage.setItem(`${CACHE_KEY_PREFIX}${userId}`, JSON.stringify(data));
+  } catch (e) {
+    console.warn('[APP] Failed to cache state locally:', e);
+  }
+}
+
 export const AppContext = createContext();
 
 export function AppProvider({ children }) {
@@ -37,7 +58,7 @@ export function AppProvider({ children }) {
   const knownNotificationIdsRef = useRef(new Set());
   const notifBaselineEstablishedRef = useRef(false);
 
-  // Application Data States (Authoritative from Backend Database)
+  // Application Data States (Hydrate instantly from local cache if available)
   const [users, setUsers] = useState([]);
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -51,6 +72,26 @@ export function AppProvider({ children }) {
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [quickCreateOpen, setQuickCreateOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('nx_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('nx_sidebar_collapsed', String(next));
+      } catch (e) {
+        console.warn('Failed to save sidebar preference', e);
+      }
+      return next;
+    });
+  }, []);
 
   const setUpdatingState = useCallback(() => {
     setSyncStatus('updating');
@@ -133,6 +174,7 @@ export function AppProvider({ children }) {
           setNotifications(data.notifications || []);
           setAnnouncements(data.announcements || []);
           setConversations(data.conversations || []);
+          saveAppCache(currentUser.id, data);
         }
       }
       setSyncedState();
@@ -307,17 +349,32 @@ export function AppProvider({ children }) {
 
   useEffect(() => {
     if (currentUser) {
+      // Instant cache hydration for current user to remove UI wait delay
+      const cached = getAppCache(currentUser.id);
+      if (cached) {
+        if (cached.users) setUsers(cached.users);
+        if (cached.teams) setTeams(cached.teams);
+        if (cached.projects) setProjects(cached.projects);
+        if (cached.tasks) setTasks(cached.tasks);
+        if (cached.documents) setDocuments(cached.documents);
+        if (cached.folderPermissions) setFolderPermissions(cached.folderPermissions);
+        if (cached.events) setEvents(cached.events);
+        if (cached.notifications) setNotifications(cached.notifications);
+        if (cached.announcements) setAnnouncements(cached.announcements);
+        if (cached.conversations) setConversations(cached.conversations);
+      }
+
       // Reset notification tracking baseline when user switches
       knownNotificationIdsRef.current = new Set();
       notifBaselineEstablishedRef.current = false;
-      refreshAppData();
+      refreshAppData(Boolean(cached));
 
-      // Centralized 1-second fallback synchronization scheduler
+      // Background fallback synchronization scheduler (every 6 seconds, event bus handles instant updates)
       const syncInterval = setInterval(() => {
         if (document.visibilityState === 'visible' && navigator.onLine) {
           refreshAppData(true);
         }
-      }, 1000);
+      }, 6000);
 
       const handleVisibilityChange = () => {
         if (document.visibilityState === 'visible' && navigator.onLine) {
@@ -719,6 +776,11 @@ export function AppProvider({ children }) {
         setSearchOpen,
         quickCreateOpen,
         setQuickCreateOpen,
+        sidebarCollapsed,
+        setSidebarCollapsed,
+        toggleSidebar,
+        mobileMenuOpen,
+        setMobileMenuOpen,
         updateProject,
         removeProject,
         updateTask,

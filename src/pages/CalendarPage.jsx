@@ -333,12 +333,13 @@ export default function CalendarPage() {
 
       {/* MONTH VIEW */}
       {viewMode === 'month' && (
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 shadow-xs">
-          <div className="grid grid-cols-7 gap-2 mb-2 text-center text-xs font-bold text-[var(--text-sec)]">
-            <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
-          </div>
+        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 shadow-xs overflow-x-auto">
+          <div className="min-w-[600px]">
+            <div className="grid grid-cols-7 gap-2 mb-2 text-center text-xs font-bold text-[var(--text-sec)]">
+              <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+            </div>
 
-          <div className="grid grid-cols-7 gap-2">
+            <div className="grid grid-cols-7 gap-2">
             {monthCells.map((day, idx) => {
               if (day === null) {
                 return <div key={`empty-${idx}`} className="min-h-[100px] p-2 rounded-xl bg-[var(--bg-main)]/30 border border-transparent opacity-30" />;
@@ -390,14 +391,16 @@ export default function CalendarPage() {
                 </div>
               );
             })}
+            </div>
           </div>
         </div>
       )}
 
       {/* WEEK VIEW */}
       {viewMode === 'week' && (
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 shadow-xs">
-          <div className="grid grid-cols-7 gap-3">
+        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 shadow-xs overflow-x-auto">
+          <div className="min-w-[650px]">
+            <div className="grid grid-cols-7 gap-3">
             {weekDays.map((d, i) => {
               const dateStr = d.toISOString().split('T')[0];
               const dayEvents = visibleEvents.filter(e => {
@@ -433,6 +436,7 @@ export default function CalendarPage() {
                 </div>
               );
             })}
+            </div>
           </div>
         </div>
       )}
