@@ -1530,38 +1530,21 @@ async function handleConversations(action, payload, authUser, res) {
     await ensureCoreChannels();
     // Capture the cursor before reading messages so concurrent sends are picked up by sync.
     const cursorResult = await query('SELECT NOW() AS "syncCursor";');
-    const conversationsResult = authUser.role === 'admin'
-      ? await query(`
-          SELECT c.id, c.name,
-            CASE WHEN c.type = 'direct' THEN 'dm' ELSE c.type::text END AS type,
-            c.department, c.project_id AS "projectId",
-            c.is_read_only AS "isReadOnly", c.created_at AS "createdAt",
-            c.last_message AS "lastMessage", c.last_message_at AS "lastMessageAt",
-            COALESCE(cp.is_pinned, false) AS pinned,
-            COALESCE(cp.is_muted, false) AS muted,
-            cp.last_read_at AS "lastReadAt",
-            COALESCE((SELECT json_agg(p.user_id) FROM conversation_participants p
-                      WHERE p.conversation_id = c.id), '[]'::json) AS "participantIds"
-          FROM conversations c
-          LEFT JOIN conversation_participants cp
-            ON cp.conversation_id = c.id AND cp.user_id = $1
-          ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC;
-        `, [authUser.id])
-      : await query(`
-          SELECT c.id, c.name,
-            CASE WHEN c.type = 'direct' THEN 'dm' ELSE c.type::text END AS type,
-            c.department, c.project_id AS "projectId",
-            c.is_read_only AS "isReadOnly", c.created_at AS "createdAt",
-            c.last_message AS "lastMessage", c.last_message_at AS "lastMessageAt",
-            cp.is_pinned AS pinned, cp.is_muted AS muted,
-            cp.last_read_at AS "lastReadAt",
-            COALESCE((SELECT json_agg(p.user_id) FROM conversation_participants p
-                      WHERE p.conversation_id = c.id), '[]'::json) AS "participantIds"
-          FROM conversations c
-          JOIN conversation_participants cp
-            ON cp.conversation_id = c.id AND cp.user_id = $1
-          ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC;
-        `, [authUser.id]);
+    const conversationsResult = await query(`
+      SELECT c.id, c.name,
+        CASE WHEN c.type = 'direct' THEN 'dm' ELSE c.type::text END AS type,
+        c.department, c.project_id AS "projectId",
+        c.is_read_only AS "isReadOnly", c.created_at AS "createdAt",
+        c.last_message AS "lastMessage", c.last_message_at AS "lastMessageAt",
+        cp.is_pinned AS pinned, cp.is_muted AS muted,
+        cp.last_read_at AS "lastReadAt",
+        COALESCE((SELECT json_agg(p.user_id) FROM conversation_participants p
+                  WHERE p.conversation_id = c.id), '[]'::json) AS "participantIds"
+      FROM conversations c
+      JOIN conversation_participants cp
+        ON cp.conversation_id = c.id AND cp.user_id = $1
+      ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC;
+    `, [authUser.id]);
 
     const conversations = conversationsResult.rows;
     const messages = {};
@@ -1603,40 +1586,22 @@ async function handleConversations(action, payload, authUser, res) {
       : new Date(0);
 
     const cursorResult = await query('SELECT NOW() AS "syncCursor";');
-    const conversationsResult = authUser.role === 'admin'
-      ? await query(`
-          SELECT c.id, c.name,
-            CASE WHEN c.type = 'direct' THEN 'dm' ELSE c.type::text END AS type,
-            c.department, c.project_id AS "projectId",
-            c.is_read_only AS "isReadOnly", c.created_at AS "createdAt",
-            c.last_message AS "lastMessage", c.last_message_at AS "lastMessageAt",
-            COALESCE(cp.is_pinned, false) AS pinned,
-            COALESCE(cp.is_muted, false) AS muted,
-            cp.last_read_at AS "lastReadAt",
-            COALESCE((SELECT json_agg(p.user_id) FROM conversation_participants p
-                      WHERE p.conversation_id = c.id), '[]'::json) AS "participantIds"
-          FROM conversations c
-          LEFT JOIN conversation_participants cp
-            ON cp.conversation_id = c.id AND cp.user_id = $1
-          WHERE c.created_at > $2 OR c.last_message_at > $2
-          ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC;
-        `, [authUser.id, since])
-      : await query(`
-          SELECT c.id, c.name,
-            CASE WHEN c.type = 'direct' THEN 'dm' ELSE c.type::text END AS type,
-            c.department, c.project_id AS "projectId",
-            c.is_read_only AS "isReadOnly", c.created_at AS "createdAt",
-            c.last_message AS "lastMessage", c.last_message_at AS "lastMessageAt",
-            cp.is_pinned AS pinned, cp.is_muted AS muted,
-            cp.last_read_at AS "lastReadAt",
-            COALESCE((SELECT json_agg(p.user_id) FROM conversation_participants p
-                      WHERE p.conversation_id = c.id), '[]'::json) AS "participantIds"
-          FROM conversations c
-          JOIN conversation_participants cp
-            ON cp.conversation_id = c.id AND cp.user_id = $1
-          WHERE c.created_at > $2 OR c.last_message_at > $2
-          ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC;
-        `, [authUser.id, since]);
+    const conversationsResult = await query(`
+      SELECT c.id, c.name,
+        CASE WHEN c.type = 'direct' THEN 'dm' ELSE c.type::text END AS type,
+        c.department, c.project_id AS "projectId",
+        c.is_read_only AS "isReadOnly", c.created_at AS "createdAt",
+        c.last_message AS "lastMessage", c.last_message_at AS "lastMessageAt",
+        cp.is_pinned AS pinned, cp.is_muted AS muted,
+        cp.last_read_at AS "lastReadAt",
+        COALESCE((SELECT json_agg(p.user_id) FROM conversation_participants p
+                  WHERE p.conversation_id = c.id), '[]'::json) AS "participantIds"
+      FROM conversations c
+      JOIN conversation_participants cp
+        ON cp.conversation_id = c.id AND cp.user_id = $1
+      WHERE c.created_at > $2 OR c.last_message_at > $2
+      ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC;
+    `, [authUser.id, since]);
 
     const changedResult = await query(`
       SELECT m.id, m.conversation_id AS "conversationId",
@@ -1655,12 +1620,12 @@ async function handleConversations(action, payload, authUser, res) {
       FROM messages m
       LEFT JOIN users u ON u.id = m.sender_id
       WHERE m.updated_at > $1
-        AND ($2 = 'admin' OR EXISTS (
+        AND EXISTS (
           SELECT 1 FROM conversation_participants cp
-          WHERE cp.conversation_id = m.conversation_id AND cp.user_id = $3
-        ))
+          WHERE cp.conversation_id = m.conversation_id AND cp.user_id = $2
+        )
       ORDER BY m.created_at ASC;
-    `, [since, authUser.role, authUser.id]);
+    `, [since, authUser.id]);
     const changedMessages = changedResult.rows;
 
     return sendSuccess(res, {

@@ -391,9 +391,9 @@ export function MessagingProvider({ children }) {
     return message;
   }, [currentUser, conversations, fetchConversations]);
 
-  const getConversationsForUser = useCallback((userId, role) =>
+  const getConversationsForUser = useCallback((userId) =>
     Object.values(conversations).filter(conversation =>
-      role === 'admin' || (conversation.participantIds || []).includes(userId)
+      (conversation.participantIds || []).includes(userId)
     ), [conversations]);
   const getMessages = useCallback(id => messages[id] || [], [messages]);
   const getUnreadCount = useCallback((conversationId, userId) => {
