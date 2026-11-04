@@ -1821,20 +1821,12 @@ async function handleConversations(action, payload, authUser, res) {
     const { conversationId, pinned, muted, markRead } = payload;
     if (!conversationId) return sendError(res, 400, 'VALIDATION_ERROR', 'Conversation ID is required');
 
-    // Admin can view/read any conversation even if not explicitly pre-enrolled
     let member = await query(`
       SELECT 1 FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2;
     `, [conversationId, authUser.id]);
 
     if (!member.rows.length) {
-      if (authUser.role === 'admin') {
-        await query(`
-          INSERT INTO conversation_participants (conversation_id, user_id)
-          VALUES ($1, $2) ON CONFLICT (conversation_id, user_id) DO NOTHING;
-        `, [conversationId, authUser.id]);
-      } else {
-        return sendError(res, 403, 'FORBIDDEN', 'You are not a participant in this conversation');
-      }
+      return sendError(res, 403, 'FORBIDDEN', 'You are not a participant in this conversation');
     }
 
     await query(`
