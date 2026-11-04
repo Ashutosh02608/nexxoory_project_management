@@ -9,6 +9,11 @@ export const forgotPasswordSchema = z.object({
   email: z.string().trim().email('Invalid email address format'),
 });
 
+export const verifyOtpSchema = z.object({
+  email: z.string().trim().email('Invalid email address format'),
+  otp: z.string().trim().length(6, 'OTP must be exactly 6 digits'),
+});
+
 export const resetPasswordSchema = z.object({
   token: z.string().min(10, 'Reset token is required'),
   newPassword: z.string().min(8, 'New password must be at least 8 characters long'),

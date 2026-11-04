@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getInitials } from '../utils/avatar';
+import { ScopeRules } from '../config/rbac';
 
 const COLUMNS = [
   { id: 'Backlog', label: 'Backlog', color: '#9AA0B2' },
@@ -197,8 +198,12 @@ export default function TasksPage() {
     setActiveTaskDrawer(updated);
   };
 
+  // Role-based scoped tasks and projects
+  const scopedProjects = ScopeRules.filterProjects(projects, currentUser, teams);
+  const scopedTasks = ScopeRules.filterTasks(tasks, currentUser, teams, scopedProjects);
+
   // Filters
-  const filteredTasks = tasks.filter(t => {
+  const filteredTasks = scopedTasks.filter(t => {
     const matchesSearch = t.title.toLowerCase().includes(search.toLowerCase()) ||
       (t.description && t.description.toLowerCase().includes(search.toLowerCase()));
     const matchesProject = projectFilter === 'ALL'
@@ -343,7 +348,9 @@ export default function TasksPage() {
                           }`}>
                             {task.priority}
                           </span>
-                          <span className="text-[10px] text-[var(--text-sec)]">Due {task.dueDate.substring(5)}</span>
+                          <span className="text-[10px] text-[var(--text-sec)]">
+                            Due {task.dueDate ? String(task.dueDate).substring(5) : 'N/A'}
+                          </span>
                         </div>
 
                         <h4 className="font-semibold text-xs text-[var(--text-main)] line-clamp-2">{task.title}</h4>

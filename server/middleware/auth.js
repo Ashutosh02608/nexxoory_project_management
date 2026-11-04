@@ -5,6 +5,10 @@ import { sendError } from '../utils/response.js';
 // In-memory cache for validated user auth records to prevent redundant DB roundtrips (TTL: 60s)
 const userCache = new Map();
 
+export function invalidateUserCache(userId) {
+  if (userId) userCache.delete(userId);
+}
+
 /**
  * Extracts Bearer token from Authorization header, validates JWT,
  * and fetches the authoritative user record from PostgreSQL (or memory cache).

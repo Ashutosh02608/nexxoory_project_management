@@ -3,10 +3,10 @@ import {
   MessageSquare, Send, Paperclip, Smile, MoreVertical, Hash, User,
   Search, Bell, BellOff, Pin, PinOff, Trash2, Edit3, Reply,
   Users, ChevronRight, X, Check, CheckCheck, Megaphone, FolderOpen,
-  Building2, AtSign, Inbox, ArrowLeft, Info, ChevronDown, Plus, Copy
+  Building2, AtSign, Inbox, ArrowLeft, ArrowRight, Info, ChevronDown, Plus, Copy
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { useMessaging, convId as makeConvId } from '../context/MessagingContext';
+import { useMessaging } from '../context/MessagingContext';
 import { getInitials } from '../utils/avatar';
 import { format, isToday, isYesterday } from '../utils/dateHelpers';
 
@@ -27,6 +27,13 @@ function fmtFull(ts) {
 }
 
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '✅', '👏'];
+
+function getConvIcon(type) {
+  if (type === 'announcements') return '📢';
+  if (type === 'project') return '📁';
+  if (type === 'department') return '🏢';
+  return null;
+}
 
 // ─── Avatar ────────────────────────────────────────────────────────────────
 function Avatar({ name, icon, size = 'sm', online = false }) {
@@ -75,7 +82,7 @@ const NAV_SECTIONS = [
 
 function LeftNav({ activeSection, onSection, totalUnread }) {
   return (
-    <div className="w-56 shrink-0 border-r border-[var(--border)] bg-[var(--bg-main)] flex flex-col py-4">
+    <div className="w-56 shrink-0 border-r border-[var(--border)] bg-[var(--bg-main)] flex flex-col h-full min-h-0 py-4">
       <div className="px-4 pb-3">
         <h2 className="text-xs font-bold text-[var(--text-sec)] uppercase tracking-wider flex items-center gap-2">
           <MessageSquare className="w-3.5 h-3.5" /> Messages
@@ -92,11 +99,10 @@ function LeftNav({ activeSection, onSection, totalUnread }) {
           const active = activeSection === sec.id;
           return (
             <button key={sec.id} onClick={() => onSection(sec.id)}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
-                active
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${active
                   ? 'bg-[#635BFF] text-white shadow-sm'
                   : 'text-[var(--text-sec)] hover:text-[var(--text-main)] hover:bg-[var(--surface)]'
-              }`}>
+                }`}>
               <Icon className="w-3.5 h-3.5 shrink-0" />
               <span className="truncate">{sec.label}</span>
             </button>
@@ -112,14 +118,16 @@ function ConvItem({ conv, isActive, onClick, unread, lastMsg, pinned, muted, use
   const otherUser = conv.type === 'dm'
     ? users.find(u => conv.participantIds?.find(pid => pid !== currentUser?.id) === u.id)
     : null;
-  const displayName = conv.type === 'dm' ? (otherUser?.name || conv.name) : conv.name;
-  const icon = conv.icon || null;
+  const isDeletedParticipant = conv.type === 'dm' && !otherUser;
+  const displayName = conv.type === 'dm'
+    ? (otherUser?.name || (isDeletedParticipant ? 'Deleted Employee' : conv.name))
+    : conv.name;
+  const icon = conv.icon || getConvIcon(conv.type);
 
   return (
     <button onClick={onClick}
-      className={`w-full flex items-center gap-3 px-3 py-3 text-left transition-all hover:bg-[var(--bg-main)] ${
-        isActive ? 'bg-[var(--bg-main)] border-l-2 border-[#635BFF]' : 'border-l-2 border-transparent'
-      }`}>
+      className={`w-full flex items-center gap-3 px-3 py-3 text-left transition-all hover:bg-[var(--bg-main)] ${isActive ? 'bg-[var(--bg-main)] border-l-2 border-[#635BFF]' : 'border-l-2 border-transparent'
+        }`}>
       <div className="relative shrink-0">
         <Avatar name={displayName} icon={icon} size="sm" />
         {conv.type === 'dm' && otherUser?.status === 'active' && (
@@ -177,9 +185,9 @@ function ConversationList({ section, convList, activeConvId, onSelect, search, o
   }, [convList, section, search, currentUser, getUserSetting, getLastMessage]);
 
   return (
-    <div className="w-72 shrink-0 border-r border-[var(--border)] bg-[var(--surface)] flex flex-col">
+    <div className="w-72 shrink-0 border-r border-[var(--border)] bg-[var(--surface)] flex flex-col h-full min-h-0">
       {/* Search */}
-      <div className="p-3 border-b border-[var(--border)]">
+      <div className="p-3 border-b border-[var(--border)] shrink-0">
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-sec)]" />
           <input
@@ -190,8 +198,8 @@ function ConversationList({ section, convList, activeConvId, onSelect, search, o
           />
         </div>
       </div>
-      {/* List */}
-      <div className="flex-1 overflow-y-auto divide-y divide-[var(--border)]/30">
+      {/* List with Scroll */}
+      <div className="flex-1 overflow-y-auto min-h-0 divide-y divide-[var(--border)]/30">
         {filtered.length === 0 && (
           <div className="p-6 text-center text-xs text-[var(--text-sec)]">
             No conversations
@@ -217,7 +225,7 @@ function ConversationList({ section, convList, activeConvId, onSelect, search, o
 }
 
 // ─── Message Bubble ────────────────────────────────────────────────────────
-function MessageBubble({ msg, isMine, users, currentUser, onReply, onEdit, onDelete, onReact, messages }) {
+function MessageBubble({ msg, isMine, isEditable, users, currentUser, onReply, onEdit, onReact, messages }) {
   const [showMenu, setShowMenu] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -265,9 +273,8 @@ function MessageBubble({ msg, isMine, users, currentUser, onReply, onEdit, onDel
 
         {/* Announcement badge */}
         {isAnn && msg.priority && msg.priority !== 'normal' && (
-          <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full mb-1 ${
-            msg.priority === 'urgent' ? 'bg-red-500 text-white' : 'bg-amber-500 text-white'
-          }`}>{msg.priority}</span>
+          <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full mb-1 ${msg.priority === 'urgent' ? 'bg-red-500 text-white' : 'bg-amber-500 text-white'
+            }`}>{msg.priority}</span>
         )}
         {isAnn && msg.title && (
           <span className="text-xs font-bold text-[var(--text-main)] mb-1">{msg.title}</span>
@@ -276,13 +283,12 @@ function MessageBubble({ msg, isMine, users, currentUser, onReply, onEdit, onDel
         <div className="relative" ref={menuRef}>
           {/* Bubble */}
           <div
-            className={`px-3 py-2 rounded-2xl text-xs leading-relaxed cursor-default select-text ${
-              isAnn
+            className={`px-3 py-2 rounded-2xl text-xs leading-relaxed cursor-default select-text ${isAnn
                 ? `border ${priorityBg[msg.priority] || ''} bg-[var(--surface)] text-[var(--text-main)] rounded-xl`
                 : isMine
                   ? 'bg-[#635BFF] text-white rounded-br-sm'
                   : 'bg-[var(--bg-main)] text-[var(--text-main)] border border-[var(--border)] rounded-bl-sm'
-            }`}
+              }`}
           >
             {editing ? (
               <div className="flex gap-2 items-center">
@@ -314,15 +320,10 @@ function MessageBubble({ msg, isMine, users, currentUser, onReply, onEdit, onDel
             <button onClick={() => onReply(msg)} title="Reply" className="p-0.5 rounded hover:bg-[var(--bg-main)]">
               <Reply className="w-3.5 h-3.5 text-[var(--text-sec)]" />
             </button>
-            {isMine && !isAnn && (
-              <>
-                <button onClick={() => setEditing(true)} title="Edit" className="p-0.5 rounded hover:bg-[var(--bg-main)]">
-                  <Edit3 className="w-3.5 h-3.5 text-[var(--text-sec)]" />
-                </button>
-                <button onClick={() => onDelete(msg.id)} title="Delete" className="p-0.5 rounded hover:bg-[var(--bg-main)]">
-                  <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                </button>
-              </>
+            {isEditable && (
+              <button onClick={() => setEditing(true)} title="Edit" className="p-0.5 rounded hover:bg-[var(--bg-main)]">
+                <Edit3 className="w-3.5 h-3.5 text-[var(--text-sec)]" />
+              </button>
             )}
             <button onClick={() => { navigator.clipboard?.writeText(msg.text); }} title="Copy" className="p-0.5 rounded hover:bg-[var(--bg-main)]">
               <Copy className="w-3.5 h-3.5 text-[var(--text-sec)]" />
@@ -339,11 +340,10 @@ function MessageBubble({ msg, isMine, users, currentUser, onReply, onEdit, onDel
             {Object.entries(msg.reactions).map(([emoji, reactors]) =>
               reactors.length > 0 && (
                 <button key={emoji} onClick={() => onReact(msg.id, emoji)}
-                  className={`flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full border transition-all ${
-                    reactors.includes(currentUser?.id)
+                  className={`flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full border transition-all ${reactors.includes(currentUser?.id)
                       ? 'bg-[#635BFF]/10 border-[#635BFF]/30 text-[#635BFF]'
                       : 'bg-[var(--bg-main)] border-[var(--border)] text-[var(--text-sec)] hover:border-[#635BFF]/30'
-                  }`}>
+                    }`}>
                   {emoji} {reactors.length}
                 </button>
               )
@@ -463,16 +463,14 @@ function ConvInfoPanel({ conv, users, currentUser, onClose, onPin, onMute, pinne
 
         <div className="flex gap-2">
           <button onClick={onPin}
-            className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-[10px] font-semibold border transition-all ${
-              pinned ? 'bg-[#635BFF] text-white border-[#635BFF]' : 'border-[var(--border)] text-[var(--text-sec)] hover:bg-[var(--surface)]'
-            }`}>
+            className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-[10px] font-semibold border transition-all ${pinned ? 'bg-[#635BFF] text-white border-[#635BFF]' : 'border-[var(--border)] text-[var(--text-sec)] hover:bg-[var(--surface)]'
+              }`}>
             {pinned ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />}
             {pinned ? 'Unpin' : 'Pin'}
           </button>
           <button onClick={onMute}
-            className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-[10px] font-semibold border transition-all ${
-              muted ? 'bg-amber-500 text-white border-amber-500' : 'border-[var(--border)] text-[var(--text-sec)] hover:bg-[var(--surface)]'
-            }`}>
+            className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-[10px] font-semibold border transition-all ${muted ? 'bg-amber-500 text-white border-amber-500' : 'border-[var(--border)] text-[var(--text-sec)] hover:bg-[var(--surface)]'
+              }`}>
             {muted ? <Bell className="w-3 h-3" /> : <BellOff className="w-3 h-3" />}
             {muted ? 'Unmute' : 'Mute'}
           </button>
@@ -506,7 +504,7 @@ function ConvInfoPanel({ conv, users, currentUser, onClose, onPin, onMute, pinne
 
 // ─── Main Chat Panel ────────────────────────────────────────────────────────
 function ChatPanel({ convId: activeConvId, conversations, messages: allMessages, users, currentUser, permissions,
-  sendMessage, editMessage, deleteMessage, addReaction, markRead, publishAnnouncement,
+  sendMessage, editMessage, addReaction, markRead, publishAnnouncement,
   pinConversation, muteConversation, getUserSetting, getUnreadCount }) {
 
   const conv = conversations[activeConvId];
@@ -517,16 +515,31 @@ function ChatPanel({ convId: activeConvId, conversations, messages: allMessages,
   const [showAnnComposer, setShowAnnComposer] = useState(false);
   const [msgSearch, setMsgSearch] = useState('');
   const [showMsgSearch, setShowMsgSearch] = useState(false);
-  const bottomRef = useRef(null);
+  const scrollContainerRef = useRef(null);
   const inputRef = useRef(null);
+  const prevConvIdRef = useRef(activeConvId);
 
   const userSettings = getUserSetting(activeConvId, currentUser?.id) || {};
   const pinned = userSettings.pinned;
   const muted = userSettings.muted;
 
-  // Auto-scroll
+  // Controlled scroll strictly inside the message container without moving window/panel
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    // When switching to a different conversation, immediately position at the bottom of message history
+    if (prevConvIdRef.current !== activeConvId) {
+      prevConvIdRef.current = activeConvId;
+      container.scrollTop = container.scrollHeight;
+      return;
+    }
+
+    // When a new message arrives in the current conversation, auto-scroll only if user is near bottom
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+    if (isNearBottom) {
+      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+    }
   }, [messages.length, activeConvId]);
 
   // Mark read on open
@@ -543,10 +556,17 @@ function ChatPanel({ convId: activeConvId, conversations, messages: allMessages,
 
   const handleSend = useCallback(() => {
     if (!input.trim() || !canSend) return;
-    sendMessage(activeConvId, input.trim(), replyTo?.id || null);
+    sendMessage(activeConvId, input.trim(), replyTo?.id || null).catch(error => {
+      console.error('[MESSAGING] Message send failed:', error);
+      window.alert(error.message || 'Message could not be sent. Please try again.');
+    });
     setInput('');
     setReplyTo(null);
-    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+    setTimeout(() => {
+      if (scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: 'smooth' });
+      }
+    }, 50);
   }, [input, canSend, sendMessage, activeConvId, replyTo]);
 
   const handleKeyDown = (e) => {
@@ -561,6 +581,18 @@ function ChatPanel({ convId: activeConvId, conversations, messages: allMessages,
     return messages.filter(m => !m.deleted && m.text?.toLowerCase().includes(msgSearch.toLowerCase()));
   }, [messages, msgSearch]);
 
+  // Identify user's single latest message in this conversation
+  const latestMyMessageId = useMemo(() => {
+    if (!currentUser?.id || !messages.length) return null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.senderId === currentUser.id && !m.deleted) {
+        return m.id;
+      }
+    }
+    return null;
+  }, [messages, currentUser?.id]);
+
   if (!conv) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-[var(--text-sec)] gap-3">
@@ -574,26 +606,41 @@ function ChatPanel({ convId: activeConvId, conversations, messages: allMessages,
   const otherUser = conv.type === 'dm'
     ? users.find(u => conv.participantIds?.includes(u.id) && u.id !== currentUser?.id)
     : null;
-  const displayName = conv.type === 'dm' ? (otherUser?.name || conv.name) : conv.name;
+  const isDeletedParticipant = conv.type === 'dm' && !otherUser;
+  const displayName = conv.type === 'dm'
+    ? (otherUser?.name || (isDeletedParticipant ? 'Deleted Employee' : conv.name))
+    : conv.name;
+  const icon = conv.icon || getConvIcon(conv.type);
 
   return (
-    <div className="flex-1 flex min-w-0">
-      <div className="flex-1 flex flex-col min-w-0">
+    <div className="flex-1 flex min-w-0 h-full min-h-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 h-full min-h-0 overflow-hidden">
         {/* Header */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 z-10">
           <div className="relative">
-            <Avatar name={displayName} icon={conv.icon} size="lg" />
+            <Avatar name={displayName} icon={icon} size="lg" />
             {conv.type === 'dm' && otherUser?.status === 'active' && (
               <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-[var(--surface)]" />
             )}
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-bold text-[var(--text-main)] truncate">{displayName}</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-[var(--text-main)] truncate">{displayName}</h3>
+              {conv.projectId && (
+                <a
+                  href="/projects"
+                  className="text-[10px] font-semibold text-[#1E6091] hover:underline flex items-center gap-0.5 shrink-0"
+                  title="View project details"
+                >
+                  View Project <ArrowRight className="w-2.5 h-2.5 inline" />
+                </a>
+              )}
+            </div>
             <p className="text-[10px] text-[var(--text-sec)]">
               {conv.type === 'dm' ? (otherUser?.role?.replace('_', ' ') || 'Direct Message') :
-               conv.type === 'project' ? `${conv.participantIds?.length || 0} members · Project Group` :
-               conv.type === 'department' ? `${conv.participantIds?.length || 0} members · Department Group` :
-               'Company Announcements · Read-only for non-admins'}
+                conv.type === 'project' ? `${conv.participantIds?.length || 0} members · Project Group` :
+                  conv.type === 'department' ? `${conv.participantIds?.length || 0} members · Department Group` :
+                    'Company Announcements · Read-only for non-admins'}
             </p>
           </div>
           <div className="flex items-center gap-1.5">
@@ -626,9 +673,9 @@ function ChatPanel({ convId: activeConvId, conversations, messages: allMessages,
         )}
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
+        <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-1">
           {visibleMessages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-[var(--text-sec)] gap-2 py-16">
+            <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-[var(--text-sec)] gap-2 py-8">
               <div className="text-4xl">{conv.icon || '💬'}</div>
               <p className="text-xs font-medium">No messages yet</p>
               <p className="text-[10px] opacity-60">
@@ -636,21 +683,28 @@ function ChatPanel({ convId: activeConvId, conversations, messages: allMessages,
               </p>
             </div>
           )}
-          {visibleMessages.map((msg) => (
-            <MessageBubble
-              key={msg.id}
-              msg={msg}
-              isMine={msg.senderId === currentUser?.id}
-              users={users}
-              currentUser={currentUser}
-              messages={messages}
-              onReply={m => { setReplyTo(m); inputRef.current?.focus(); }}
-              onEdit={(id, text) => editMessage(activeConvId, id, text)}
-              onDelete={id => deleteMessage(activeConvId, id)}
-              onReact={(id, emoji) => addReaction(activeConvId, id, emoji)}
-            />
-          ))}
-          <div ref={bottomRef} />
+          {visibleMessages.map((msg) => {
+            const isMine = msg.senderId === currentUser?.id;
+            const isLatest = msg.id === latestMyMessageId;
+            const ageMs = Date.now() - new Date(msg.timestamp).getTime();
+            const isWithin10Min = ageMs <= 10 * 60 * 1000;
+            const isEditable = isMine && isLatest && isWithin10Min && !msg.isAnnouncement && !msg.deleted;
+
+            return (
+              <MessageBubble
+                key={msg.id}
+                msg={msg}
+                isMine={isMine}
+                isEditable={isEditable}
+                users={users}
+                currentUser={currentUser}
+                messages={messages}
+                onReply={m => { setReplyTo(m); inputRef.current?.focus(); }}
+                onEdit={(id, text) => editMessage(activeConvId, id, text)}
+                onReact={(id, emoji) => addReaction(activeConvId, id, emoji)}
+              />
+            );
+          })}
         </div>
 
         {/* Announcement Composer */}
@@ -731,7 +785,7 @@ export default function MessagesPage() {
   const { currentUser, users, permissions } = useApp();
   const {
     conversations, messages, getConversationsForUser, getUnreadCount, getLastMessage,
-    getUserSetting, sendMessage, editMessage, deleteMessage, addReaction, markRead,
+    getUserSetting, sendMessage, editMessage, addReaction, markRead,
     startDM, pinConversation, muteConversation, publishAnnouncement,
   } = useMessaging();
 
@@ -757,25 +811,30 @@ export default function MessagesPage() {
     setMobileView('chat');
   };
 
-  const handleStartDM = (userId) => {
-    const cid = startDM(userId);
-    setActiveSection('dm');
-    setTimeout(() => {
+  const handleStartDM = async (userId) => {
+    try {
+      const cid = await startDM(userId);
+      if (!cid) return;
+      setActiveSection('dm');
       setActiveConvId(cid);
       setMobileView('chat');
-    }, 50);
+      setShowNewDM(false);
+    } catch (error) {
+      console.error('[MESSAGING] Unable to start direct message:', error);
+      window.alert(error.message || 'Unable to start conversation. Please try again.');
+    }
   };
 
   return (
-    <div className="h-[calc(100vh-8.5rem)] flex bg-[var(--surface)] border border-[var(--border)] rounded-2xl overflow-hidden shadow-xs relative">
+    <div className="h-full w-full flex bg-[var(--surface)] border border-[var(--border)] rounded-2xl overflow-hidden shadow-xs relative">
       {/* Left Nav — hidden on mobile unless list view */}
-      <div className={`${mobileView === 'chat' ? 'hidden lg:flex' : 'flex'} flex-col`}>
+      <div className={`${mobileView === 'chat' ? 'hidden lg:flex' : 'flex'} flex-col h-full min-h-0 shrink-0`}>
         <LeftNav activeSection={activeSection} onSection={(s) => { setActiveSection(s); setMobileView('list'); }} totalUnread={totalUnread} />
       </div>
 
       {/* Middle: Conversation list */}
-      <div className={`${mobileView === 'chat' ? 'hidden lg:flex' : 'flex'} flex-col`}>
-        <div className="flex-1 flex flex-col h-full">
+      <div className={`${mobileView === 'chat' ? 'hidden lg:flex' : 'flex'} flex-col h-full min-h-0 shrink-0`}>
+        <div className="flex-1 flex flex-col h-full min-h-0">
           {/* Header for section */}
           <div className="px-3 pt-3 pb-2 border-b border-[var(--border)] flex items-center justify-between bg-[var(--surface)] shrink-0">
             <h3 className="text-xs font-bold text-[var(--text-main)] capitalize">
@@ -805,10 +864,10 @@ export default function MessagesPage() {
       </div>
 
       {/* Right: Chat */}
-      <div className={`${mobileView === 'list' ? 'hidden lg:flex' : 'flex'} flex-1 flex-col min-w-0`}>
+      <div className={`${mobileView === 'list' ? 'hidden lg:flex' : 'flex'} flex-1 flex-col h-full min-h-0 overflow-hidden`}>
         {/* Mobile back button */}
         {mobileView === 'chat' && (
-          <div className="lg:hidden px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)]">
+          <div className="lg:hidden px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
             <button onClick={() => setMobileView('list')} className="flex items-center gap-1 text-xs text-[#635BFF] font-semibold">
               <ArrowLeft className="w-3.5 h-3.5" /> Back
             </button>
@@ -823,7 +882,6 @@ export default function MessagesPage() {
           permissions={permissions}
           sendMessage={sendMessage}
           editMessage={editMessage}
-          deleteMessage={deleteMessage}
           addReaction={addReaction}
           markRead={markRead}
           publishAnnouncement={publishAnnouncement}

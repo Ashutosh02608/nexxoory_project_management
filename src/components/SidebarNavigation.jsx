@@ -11,19 +11,27 @@ import logoImg from '../assets/nexxoory_logo.webp';
 
 export default function SidebarNavigation() {
   const [collapsed, setCollapsed] = useState(false);
-  const { currentUser } = useApp();
+  const { currentUser, notifications = [] } = useApp();
   const messaging = useMessaging();
 
   const navItems = getRoleNavigation(currentUser?.role);
+
+  const notifUnread = useMemo(() => {
+    if (!currentUser) return 0;
+    return notifications.filter(n => (!n.userId || n.userId === currentUser.id) && !n.read).length;
+  }, [notifications, currentUser?.id]);
 
   const msgUnread = useMemo(() => {
     if (!messaging || !currentUser) return 0;
     try {
       const convs = messaging.getConversationsForUser(currentUser.id, currentUser.role);
-      return convs.reduce((sum, c) => sum + messaging.getUnreadCount(c.id, currentUser.id), 0);
+      // Count unread messages across Direct Messages, Project Groups, and Department Groups (exclude announcements)
+      return convs
+        .filter(c => c.type !== 'announcements')
+        .reduce((sum, c) => sum + messaging.getUnreadCount(c.id, currentUser.id), 0);
     } catch { return 0; }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messaging?.messages, currentUser?.id]);
+  }, [messaging?.messages, messaging?.settings, currentUser?.id]);
 
   return (
     <aside
@@ -80,6 +88,7 @@ export default function SidebarNavigation() {
           {navItems.map((item) => {
             const Icon = item.icon;
             const isMessages = item.path === '/messages';
+            const isNotifications = item.path === '/notifications';
             return (
               <NavLink
                 key={item.path}
@@ -95,10 +104,21 @@ export default function SidebarNavigation() {
               >
                 <Icon className="w-4 h-4 shrink-0" />
                 {!collapsed && <span className="truncate">{item.label}</span>}
-                {/* Unread badge */}
+
+                {/* Notifications Red Badge */}
+                {isNotifications && notifUnread > 0 && !collapsed && (
+                  <span className="ml-auto bg-[#EF4444] text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full min-w-[16px] text-center leading-none shadow-xs">
+                    {notifUnread > 9 ? '9+' : notifUnread}
+                  </span>
+                )}
+                {isNotifications && notifUnread > 0 && collapsed && (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#EF4444] rounded-full" />
+                )}
+
+                {/* Messages Badge */}
                 {isMessages && msgUnread > 0 && !collapsed && (
                   <span className="ml-auto bg-[#635BFF] text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full min-w-[16px] text-center leading-none">
-                    {msgUnread > 99 ? '99+' : msgUnread}
+                    {msgUnread > 9 ? '9+' : msgUnread}
                   </span>
                 )}
                 {isMessages && msgUnread > 0 && collapsed && (

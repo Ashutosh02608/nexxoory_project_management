@@ -153,6 +153,13 @@ export const AuthAPI = {
     });
   },
 
+  verifyOtp: async (email, otp) => {
+    return await apiRequest('/api/v1/auth/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email, otp }),
+    });
+  },
+
   resetPassword: async (token, newPassword) => {
     return await apiRequest('/api/v1/auth/reset-password', {
       method: 'POST',
@@ -185,7 +192,9 @@ export const UsersAPI = {
   getAll: async () => (await dataRequest('users', 'list'))?.users || [],
   create: async (data) => (await dataRequest('users', 'create', data))?.user,
   update: async (data) => (await dataRequest('users', 'update', data))?.user,
-  delete: async (id) => await dataRequest('users', 'delete', { id }),
+  getDeleteSummary: async (id) => await dataRequest('users', 'delete-summary', { id }),
+  delete: async (id, projectReassignments = {}, teamReassignments = {}) =>
+    await dataRequest('users', 'delete', { id, projectReassignments, teamReassignments }),
 };
 
 export const TeamsAPI = {
@@ -212,6 +221,7 @@ export const TasksAPI = {
 export const DocumentsAPI = {
   getAll: async () => (await dataRequest('documents', 'list'))?.documents || [],
   create: async (data) => (await dataRequest('documents', 'create', data))?.document,
+  getFile: async (id) => await dataRequest('documents', 'get-file', { id }),
   update: async (data) => await dataRequest('documents', 'update', data),
   delete: async (id) => await dataRequest('documents', 'delete', { id }),
   assignFileAccess: async (id, userIds) => await dataRequest('documents', 'assign-file-access', { id, userIds }),
@@ -239,7 +249,13 @@ export const AnnouncementsAPI = {
 };
 
 export const ConversationsAPI = {
-  getAll: async () => (await dataRequest('conversations', 'list')) || { conversations: [], messages: {} },
-  sendMessage: async (conversationId, text) => (await dataRequest('conversations', 'create', { conversationId, text }))?.message,
+  getAll: async () => (await dataRequest('conversations', 'list')) || { conversations: [], messages: {}, syncCursor: null },
+  sync: async (since) => (await dataRequest('conversations', 'sync', { since })) || { conversations: [], messages: [], syncCursor: since },
+  sendMessage: async (payload) => (await dataRequest('conversations', 'create', payload))?.message,
+  editMessage: async (messageId, text) => (await dataRequest('conversations', 'edit', { messageId, text }))?.message,
+  deleteMessage: async (messageId) => await dataRequest('conversations', 'delete', { messageId }),
+  react: async (messageId, emoji) => await dataRequest('conversations', 'react', { messageId, emoji }),
+  startDM: async (targetUserId) => (await dataRequest('conversations', 'start-dm', { targetUserId }))?.conversationId,
+  updateSettings: async (payload) => await dataRequest('conversations', 'update-settings', payload),
 };
 

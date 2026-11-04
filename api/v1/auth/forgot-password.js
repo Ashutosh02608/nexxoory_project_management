@@ -35,17 +35,12 @@ export default async function handler(req, res) {
     }
 
     const { email } = parsed.data;
-    const result = await AuthService.requestPasswordReset(email);
+    await AuthService.requestPasswordReset(email);
 
     // Generic response to prevent email enumeration
     const responsePayload = {
       messageSent: true,
     };
-
-    // NEVER leak reset tokens in production; only attach devToken in explicit non-production dev mode
-    if (!env.isProduction && result?.rawResetToken) {
-      responsePayload.devToken = result.rawResetToken;
-    }
 
     return sendSuccess(
       res,
@@ -53,7 +48,7 @@ export default async function handler(req, res) {
       'If an active account exists for that email, password recovery instructions have been initiated.'
     );
   } catch (err) {
-    console.error('[FORGOT PASSWORD API ERROR]', err.name);
+    console.error('[FORGOT PASSWORD API ERROR]', err);
     return sendError(res, 500, 'SERVER_ERROR', 'Failed to process password recovery request');
   }
 }

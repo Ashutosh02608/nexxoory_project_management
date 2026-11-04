@@ -1,6 +1,6 @@
-import { authenticateRequest } from '../../server/middleware/auth.js';
+import { authenticateRequest, invalidateUserCache } from '../../server/middleware/auth.js';
 import { handleCors, sendSuccess, sendError } from '../../server/utils/response.js';
-import { query } from '../../server/config/db.js';
+import { query, transaction } from '../../server/config/db.js';
 import argon2 from 'argon2';
 
 /**
@@ -335,11 +335,115 @@ async function handleUsers(action, payload, authUser, res) {
     return sendSuccess(res, { user: result.rows[0] }, 'User updated');
   }
 
+  if (action === 'delete-summary') {
+    if (authUser.role !== 'admin') return sendError(res, 403, 'FORBIDDEN', 'Admin only');
+    const { id } = payload;
+    if (!id) return sendError(res, 400, 'VALIDATION_ERROR', 'User ID is required');
+
+    // Projects managed by user
+    const managedProjectsRes = await query(`SELECT id, name FROM projects WHERE manager_id = $1;`, [id]);
+    // Teams led by user
+    const ledTeamsRes = await query(`SELECT id, name FROM teams WHERE leader_id = $1;`, [id]);
+    // Tasks assigned to user
+    const assignedTasksRes = await query(`SELECT id, title, status FROM tasks WHERE assignee_id = $1;`, [id]);
+    // Teams user is member of
+    const memberTeamsRes = await query(`
+      SELECT t.id, t.name FROM teams t
+      JOIN team_members tm ON tm.team_id = t.id
+      WHERE tm.user_id = $1;
+    `, [id]);
+    // Upcoming calendar events created by user
+    const upcomingEventsRes = await query(`
+      SELECT id, title, start_date FROM calendar_events
+      WHERE creator_id = $1 AND start_date >= CURRENT_TIMESTAMP;
+    `, [id]);
+
+    return sendSuccess(res, {
+      managedProjects: managedProjectsRes.rows,
+      ledTeams: ledTeamsRes.rows,
+      assignedTasks: assignedTasksRes.rows,
+      memberTeams: memberTeamsRes.rows,
+      upcomingEvents: upcomingEventsRes.rows,
+      requiresReassignment: managedProjectsRes.rows.length > 0 || ledTeamsRes.rows.length > 0
+    }, 'Deletion summary retrieved');
+  }
+
   if (action === 'delete') {
     if (authUser.role !== 'admin') return sendError(res, 403, 'FORBIDDEN', 'Admin only');
-    if (payload.id === authUser.id) return sendError(res, 400, 'INVALID_ACTION', 'Cannot delete active admin account');
-    await query('DELETE FROM users WHERE id = $1', [payload.id]);
-    return sendSuccess(res, { id: payload.id }, 'User deleted');
+    const { id, projectReassignments = {}, teamReassignments = {} } = payload;
+    if (!id) return sendError(res, 400, 'VALIDATION_ERROR', 'User ID required');
+    if (id === authUser.id) return sendError(res, 400, 'INVALID_ACTION', 'Cannot delete active admin account');
+
+    // Verify user exists
+    const userCheck = await query(`SELECT id, name, email FROM users WHERE id = $1;`, [id]);
+    if (!userCheck.rows.length) return sendError(res, 404, 'NOT_FOUND', 'User not found');
+
+    // Check project management responsibilities
+    const managedProjects = await query(`SELECT id, name FROM projects WHERE manager_id = $1;`, [id]);
+    for (const proj of managedProjects.rows) {
+      if (!projectReassignments[proj.id]) {
+        return sendError(res, 400, 'REASSIGNMENT_REQUIRED', `Project "${proj.name}" requires manager reassignment before deletion.`);
+      }
+    }
+
+    // Check team leader responsibilities
+    const ledTeams = await query(`SELECT id, name FROM teams WHERE leader_id = $1;`, [id]);
+    for (const team of ledTeams.rows) {
+      if (!teamReassignments[team.id]) {
+        return sendError(res, 400, 'REASSIGNMENT_REQUIRED', `Team "${team.name}" requires leader reassignment before deletion.`);
+      }
+    }
+
+    // Execute atomic safe retirement/deletion transaction
+    await transaction(async (client) => {
+      // 1. Reassign projects
+      for (const [projId, newManagerId] of Object.entries(projectReassignments)) {
+        await client.query(`UPDATE projects SET manager_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2;`, [newManagerId, projId]);
+      }
+
+      // 2. Reassign teams
+      for (const [teamId, newLeaderId] of Object.entries(teamReassignments)) {
+        await client.query(`UPDATE teams SET leader_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2;`, [newLeaderId, teamId]);
+      }
+
+      // 3. Unassign tasks assigned to this employee
+      await client.query(`UPDATE tasks SET assignee_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE assignee_id = $1;`, [id]);
+
+      // 4. Remove from active team memberships
+      await client.query(`DELETE FROM team_members WHERE user_id = $1;`, [id]);
+
+      // 5. Update DM conversation names and remove from active participants
+      await client.query(`
+        UPDATE conversations
+        SET name = 'DM with Deleted Employee'
+        WHERE type = 'direct'
+          AND id IN (
+            SELECT conversation_id FROM conversation_participants WHERE user_id = $1
+          );
+      `, [id]);
+      await client.query(`DELETE FROM conversation_participants WHERE user_id = $1;`, [id]);
+
+      // 6. Remove explicit document permissions
+      await client.query(`DELETE FROM folder_permissions WHERE user_id = $1;`, [id]);
+
+      // 7. Revoke all refresh tokens
+      await client.query(`UPDATE refresh_tokens SET is_revoked = true WHERE user_id = $1;`, [id]);
+
+      // 8. Soft-retire user: update name, status to Inactive, wipe password hash
+      await client.query(`
+        UPDATE users
+        SET name = 'Deleted Employee',
+            status = 'Inactive',
+            password_hash = '!DELETED_' || gen_random_uuid(),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1;
+      `, [id]);
+    });
+
+    // Invalidate auth memory cache
+    invalidateUserCache(id);
+
+    return sendSuccess(res, { id, deleted: true }, 'Employee account successfully retired');
   }
 
   return sendError(res, 400, 'UNKNOWN_ACTION', `Action "${action}" not supported`);
@@ -427,9 +531,55 @@ async function handleProjects(action, payload, authUser, res) {
       INSERT INTO projects (name, description, manager_id, primary_team_id, priority, status, start_date, due_date, progress, budget, tags)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *;
     `, [name, description || '', managerId || authUser.id, teamId || null, priority || 'Medium', status || 'Planning',
-        startDate || new Date().toISOString().split('T')[0], dueDate || new Date(Date.now() + 30*86400000).toISOString().split('T')[0],
-        progress || 0, budget || 0, tags || []]);
-    return sendSuccess(res, { project: result.rows[0] }, 'Project created', 201);
+      startDate || new Date().toISOString().split('T')[0], dueDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+      progress || 0, budget || 0, tags || []]);
+    const project = result.rows[0];
+
+    // Create notification for assigned manager
+    if (project.manager_id && project.manager_id !== authUser.id) {
+      await query(`
+        INSERT INTO notifications (user_id, title, message, type, link)
+        VALUES ($1, $2, $3, 'project', '/projects');
+      `, [project.manager_id, `Assigned to Project: ${project.name}`, `You have been assigned as the manager for ${project.name}`]);
+    }
+
+    // Create the project's messaging room as part of project creation.
+    const existingRoom = await query(`
+      SELECT id FROM conversations
+      WHERE type = 'project' AND project_id = $1
+      LIMIT 1;
+    `, [project.id]);
+    let conversationId = existingRoom.rows[0]?.id;
+
+    if (!conversationId) {
+      const room = await query(`
+        INSERT INTO conversations (name, type, project_id, is_read_only)
+        VALUES ($1, 'project', $2, false)
+        RETURNING id;
+      `, [`${project.name} — Project Group`, project.id]);
+      conversationId = room.rows[0].id;
+    }
+
+    // Include the project manager and members of every assigned team.
+    await query(`
+      INSERT INTO conversation_participants (conversation_id, user_id)
+      SELECT $1, u.id
+      FROM users u
+      WHERE u.id = $2 AND u.status != 'Inactive'
+      ON CONFLICT (conversation_id, user_id) DO NOTHING;
+    `, [conversationId, project.manager_id]);
+
+    await query(`
+      INSERT INTO conversation_participants (conversation_id, user_id)
+      SELECT $1, tm.user_id
+      FROM project_teams pt
+      JOIN team_members tm ON tm.team_id = pt.team_id
+      JOIN users u ON u.id = tm.user_id
+      WHERE pt.project_id = $2 AND u.status != 'Inactive'
+      ON CONFLICT (conversation_id, user_id) DO NOTHING;
+    `, [conversationId, project.id]);
+
+    return sendSuccess(res, { project, conversationId }, 'Project and messaging group created', 201);
   }
 
   if (action === 'update') {
@@ -440,7 +590,44 @@ async function handleProjects(action, payload, authUser, res) {
       progress = COALESCE($9, progress), budget = COALESCE($10, budget), spent = COALESCE($11, spent), tags = COALESCE($12, tags),
       updated_at = CURRENT_TIMESTAMP WHERE id = $1;
     `, [id, name, description, managerId || null, teamId || null, priority, status, dueDate, progress, budget, spent, tags]);
-    return sendSuccess(res, { id }, 'Project updated');
+
+    // Resynchronize project group conversation & membership
+    const existingRoom = await query("SELECT id FROM conversations WHERE type = 'project' AND project_id = $1 LIMIT 1;", [id]);
+    let conversationId = existingRoom.rows[0]?.id;
+    const isReadOnly = ['archived', 'completed'].includes(String(status || '').toLowerCase());
+
+    if (!conversationId) {
+      const room = await query(`
+        INSERT INTO conversations (name, type, project_id, is_read_only)
+        VALUES ($1, 'project', $2, $3)
+        RETURNING id;
+      `, [`${name || 'Project'} — Project Group`, id, isReadOnly]);
+      conversationId = room.rows[0].id;
+    } else {
+      if (name || status) {
+        await query("UPDATE conversations SET name = COALESCE($1, name), is_read_only = $2 WHERE id = $3;", [name ? `${name} — Project Group` : null, isReadOnly, conversationId]);
+      }
+    }
+
+    if (managerId) {
+      await query(`
+        INSERT INTO conversation_participants (conversation_id, user_id)
+        SELECT $1, id FROM users WHERE id = $2 AND status != 'Inactive'
+        ON CONFLICT (conversation_id, user_id) DO NOTHING;
+      `, [conversationId, managerId]);
+    }
+
+    if (teamId) {
+      await query(`
+        INSERT INTO conversation_participants (conversation_id, user_id)
+        SELECT $1, tm.user_id FROM team_members tm
+        JOIN users u ON u.id = tm.user_id
+        WHERE tm.team_id = $2 AND u.status != 'Inactive'
+        ON CONFLICT (conversation_id, user_id) DO NOTHING;
+      `, [conversationId, teamId]);
+    }
+
+    return sendSuccess(res, { id, conversationId }, 'Project updated');
   }
 
   if (action === 'delete') {
@@ -476,9 +663,36 @@ async function handleTasks(action, payload, authUser, res) {
       INSERT INTO tasks (title, description, project_id, assignee_id, team_id, priority, status, start_date, due_date, progress, labels)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *;
     `, [title, description || '', projectId || null, assigneeId || null, teamId || null, priority || 'Medium', status || 'To Do',
-        startDate || new Date().toISOString().split('T')[0], dueDate || new Date(Date.now() + 7*86400000).toISOString().split('T')[0],
-        progress || 0, labels || ['General']]);
-    return sendSuccess(res, { task: result.rows[0] }, 'Task created', 201);
+      startDate || new Date().toISOString().split('T')[0], dueDate || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+      progress || 0, labels || ['General']]);
+    const r = result.rows[0];
+
+    const normalizedTask = {
+      id: r.id,
+      title: r.title,
+      description: r.description,
+      projectId: r.project_id,
+      assigneeId: r.assignee_id,
+      teamId: r.team_id,
+      priority: r.priority,
+      status: r.status,
+      startDate: r.start_date ? new Date(r.start_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+      dueDate: r.due_date ? new Date(r.due_date).toISOString().split('T')[0] : new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+      progress: r.progress || 0,
+      labels: r.labels || [],
+      subtasks: [],
+      comments: []
+    };
+
+    // Create notification for assigned user
+    if (normalizedTask.assigneeId && normalizedTask.assigneeId !== authUser.id) {
+      await query(`
+        INSERT INTO notifications (user_id, title, message, type, link)
+        VALUES ($1, $2, $3, 'task', '/tasks');
+      `, [normalizedTask.assigneeId, `Task Assigned: ${normalizedTask.title}`, `You have been assigned to task "${normalizedTask.title}"`]);
+    }
+
+    return sendSuccess(res, { task: normalizedTask }, 'Task created', 201);
   }
 
   if (action === 'update') {
@@ -517,7 +731,7 @@ async function handleDocuments(action, payload, authUser, res) {
       name: r.name,
       folder: r.folder,
       projectId: r.project_id,
-      size: `${(r.size_bytes/1024/1024).toFixed(1)} MB`,
+      size: `${(r.size_bytes / 1024 / 1024).toFixed(1)} MB`,
       type: r.mime_type.includes('pdf') ? 'pdf' : 'doc',
       author: r.author_name || 'System',
       authorId: r.author_id,
@@ -530,13 +744,69 @@ async function handleDocuments(action, payload, authUser, res) {
   }
 
   if (action === 'create') {
-    const { name, folder, projectId, type, assignedUserIds } = payload;
-    const buf = Buffer.from('Nexxoory File Payload');
+    const { name, folder, projectId, type, mimeType, fileBase64, sizeBytes, assignedUserIds } = payload;
+    let buf;
+    if (fileBase64) {
+      // Decode base64 payload
+      const cleaned = fileBase64.replace(/^data:[^;]+;base64,/, '');
+      buf = Buffer.from(cleaned, 'base64');
+    } else {
+      buf = Buffer.from('Nexxoory Document Payload');
+    }
+
+    if (buf.length > 15 * 1024 * 1024) {
+      return sendError(res, 400, 'PAYLOAD_TOO_LARGE', 'Document size exceeds maximum 15MB limit');
+    }
+
+    const resolvedMime = mimeType || (type?.toLowerCase().includes('pdf') ? 'application/pdf' : 'application/octet-stream');
     const result = await query(`
       INSERT INTO documents (name, folder, project_id, size_bytes, mime_type, file_data, author_id, assigned_user_ids)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;
-    `, [name, folder || (projectId ? 'Project Document' : 'General'), projectId || null, buf.length, type?.toLowerCase().includes('pdf') ? 'application/pdf' : 'application/msword', buf, authUser.id, assignedUserIds || []]);
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, name, folder, project_id, size_bytes, mime_type, author_id, assigned_user_ids, created_at, updated_at;
+    `, [name, folder || (projectId ? 'Project Document' : 'General'), projectId || null, buf.length, resolvedMime, buf, authUser.id, assignedUserIds || []]);
     return sendSuccess(res, { document: result.rows[0] }, 'Document created', 201);
+  }
+
+  if (action === 'get-file') {
+    const { id } = payload;
+    if (!id) return sendError(res, 400, 'VALIDATION_ERROR', 'Document ID required');
+    const docRes = await query(`
+      SELECT id, name, mime_type, size_bytes, file_data, project_id, author_id, assigned_user_ids
+      FROM documents
+      WHERE id = $1;
+    `, [id]);
+    if (!docRes.rows[0]) return sendError(res, 404, 'NOT_FOUND', 'Document not found');
+    const doc = docRes.rows[0];
+
+    // Authorization check: Admin, Author, or Assigned
+    const isAuthorized = authUser.role === 'admin'
+      || doc.author_id === authUser.id
+      || (doc.assigned_user_ids && doc.assigned_user_ids.includes(authUser.id));
+
+    // Also check project membership if linked to project
+    let hasProjectAccess = false;
+    if (doc.project_id) {
+      const pmRes = await query(`
+        SELECT 1 FROM project_teams pt
+        JOIN team_members tm ON tm.team_id = pt.team_id
+        WHERE pt.project_id = $1 AND tm.user_id = $2
+        UNION
+        SELECT 1 FROM projects WHERE id = $1 AND manager_id = $2;
+      `, [doc.project_id, authUser.id]);
+      hasProjectAccess = Boolean(pmRes.rows[0]);
+    }
+
+    if (!isAuthorized && !hasProjectAccess) {
+      return sendError(res, 403, 'FORBIDDEN', 'Access denied to document binary');
+    }
+
+    const base64Data = doc.file_data ? doc.file_data.toString('base64') : '';
+    return sendSuccess(res, {
+      id: doc.id,
+      name: doc.name,
+      mimeType: doc.mime_type,
+      sizeBytes: doc.size_bytes,
+      fileBase64: base64Data
+    }, 'File data retrieved');
   }
 
   if (action === 'update') {
@@ -589,22 +859,95 @@ async function handleDocuments(action, payload, authUser, res) {
 // -------------------------------------------------------------
 async function handleCalendar(action, payload, authUser, res) {
   if (action === 'list') {
-    const result = await query(`SELECT * FROM calendar_events ORDER BY start_date ASC;`);
-    const events = result.rows.map(r => ({
-      id: r.id,
-      title: r.title,
-      type: r.type,
-      startDate: r.start_date ? new Date(r.start_date).toISOString() : '',
-      date: r.start_date ? new Date(r.start_date).toISOString().split('T')[0] : '',
-      time: r.start_date ? new Date(r.start_date).toTimeString().substring(0, 5) : '',
-      location: r.location
-    }));
+    // Return all events along with their attendees, project, and team links
+    const result = await query(`
+      SELECT e.*,
+        COALESCE((
+          SELECT json_agg(a.user_id)
+          FROM calendar_event_attendees a
+          WHERE a.event_id = e.id
+        ), '[]'::json) AS attendees
+      FROM calendar_events e
+      ORDER BY e.start_date ASC;
+    `);
+
+    const events = result.rows.map(r => {
+      const sDate = r.start_date ? new Date(r.start_date) : null;
+      const eDate = r.end_date ? new Date(r.end_date) : sDate;
+
+      // Extract local date components safely
+      const dateStr = sDate ? sDate.toLocaleDateString('en-CA') : '';
+      const timeStr = sDate ? sDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+
+      return {
+        id: r.id,
+        title: r.title,
+        description: r.description || '',
+        type: r.type,
+        startDate: sDate ? sDate.toISOString() : '',
+        endDate: eDate ? eDate.toISOString() : '',
+        date: dateStr,
+        time: timeStr,
+        location: r.location,
+        isAllDay: Boolean(r.is_all_day),
+        projectId: r.project_id,
+        teamId: r.team_id,
+        department: r.department,
+        creatorId: r.creator_id,
+        attendees: r.attendees || []
+      };
+    });
+
     return sendSuccess(res, { events }, 'Events retrieved');
   }
 
   if (action === 'create') {
-    const { title, description, type, startDate, endDate, date, time, location, isAllDay, projectId, teamId, attendees } = payload;
-    
+    // RBAC: Team Member cannot create events
+    if (authUser.role === 'team_member') {
+      return sendError(res, 403, 'FORBIDDEN', 'Team members do not have permission to create calendar events');
+    }
+
+    const {
+      title,
+      description,
+      type,
+      startDate,
+      endDate,
+      date,
+      time,
+      location,
+      isAllDay,
+      projectId,
+      teamId,
+      department,
+      attendees
+    } = payload;
+
+    // RBAC: Team Leader (project_manager) restrictions
+    if (authUser.role === 'project_manager') {
+      if (type === 'company_event') {
+        return sendError(res, 403, 'FORBIDDEN', 'Only administrators can create company-wide events');
+      }
+      if (teamId) {
+        const teamCheck = await query(`SELECT 1 FROM teams WHERE id = $1 AND leader_id = $2;`, [teamId, authUser.id]);
+        if (!teamCheck.rows.length) {
+          return sendError(res, 403, 'FORBIDDEN', 'Team leaders can only create events for teams they lead');
+        }
+      }
+      if (projectId) {
+        const projCheck = await query(`
+          SELECT 1 FROM projects WHERE id = $1 AND manager_id = $2
+          UNION
+          SELECT 1 FROM project_teams pt
+          JOIN teams t ON t.id = pt.team_id
+          WHERE pt.project_id = $1 AND t.leader_id = $2;
+        `, [projectId, authUser.id]);
+        if (!projCheck.rows.length) {
+          return sendError(res, 403, 'FORBIDDEN', 'Team leaders can only create events for assigned projects');
+        }
+      }
+    }
+
     // Parse valid timestamp with safe fallbacks
     let startTimestamp;
     if (startDate) {
@@ -628,17 +971,100 @@ async function handleCalendar(action, payload, authUser, res) {
     const eventType = validTypes.includes(type?.toLowerCase()) ? type.toLowerCase() : 'meeting';
 
     const result = await query(`
-      INSERT INTO calendar_events (title, description, type, start_date, end_date, location, is_all_day, project_id, team_id, creator_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;
-    `, [title || 'Untitled Event', description || '', eventType, startTimestamp, endTimestamp, location || 'Virtual', !!isAllDay, projectId || null, teamId || null, authUser.id]);
+      INSERT INTO calendar_events (
+        title, description, type, start_date, end_date, location,
+        is_all_day, project_id, team_id, department, creator_id
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING *;
+    `, [
+      title || 'Untitled Event',
+      description || '',
+      eventType,
+      startTimestamp,
+      endTimestamp,
+      location || 'Virtual',
+      !!isAllDay,
+      projectId || null,
+      teamId || null,
+      department || null,
+      authUser.id
+    ]);
 
     const r = result.rows[0];
 
-    if (Array.isArray(attendees)) {
-      for (const uid of attendees) {
-        await query(`INSERT INTO calendar_event_attendees (event_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [r.id, uid]);
-      }
+    // Store attendees
+    const safeAttendees = Array.isArray(attendees) ? attendees : [];
+    for (const uid of safeAttendees) {
+      await query(`
+        INSERT INTO calendar_event_attendees (event_id, user_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING;
+      `, [r.id, uid]);
     }
+
+    // Determine target recipient IDs for notifications
+    const recipientIds = new Set();
+
+    const isCompanyWide = eventType === 'company_event' || (!projectId && !teamId && !department && safeAttendees.length === 0);
+
+    if (isCompanyWide) {
+      const allUsers = await query(`SELECT id FROM users WHERE status != 'Inactive';`);
+      allUsers.rows.forEach(u => recipientIds.add(u.id));
+    } else {
+      // 1. Department members
+      if (department) {
+        const deptUsers = await query(`SELECT id FROM users WHERE department = $1 AND status != 'Inactive';`, [department]);
+        deptUsers.rows.forEach(u => recipientIds.add(u.id));
+      }
+      // 2. Team members
+      if (teamId) {
+        const teamUsers = await query(`
+          SELECT user_id FROM team_members tm
+          JOIN users u ON u.id = tm.user_id
+          WHERE tm.team_id = $1 AND u.status != 'Inactive'
+          UNION
+          SELECT leader_id FROM teams WHERE id = $1 AND leader_id IS NOT NULL;
+        `, [teamId]);
+        teamUsers.rows.forEach(u => recipientIds.add(u.user_id));
+      }
+      // 3. Project participants
+      if (projectId) {
+        const projUsers = await query(`
+          SELECT tm.user_id
+          FROM project_teams pt
+          JOIN team_members tm ON tm.team_id = pt.team_id
+          JOIN users u ON u.id = tm.user_id
+          WHERE pt.project_id = $1 AND u.status != 'Inactive'
+          UNION
+          SELECT manager_id FROM projects WHERE id = $1 AND manager_id IS NOT NULL;
+        `, [projectId]);
+        projUsers.rows.forEach(u => recipientIds.add(u.user_id));
+      }
+      // 4. Explicit attendees
+      safeAttendees.forEach(uid => recipientIds.add(uid));
+    }
+
+    // Exclude creator from receiving own creation notification
+    recipientIds.delete(authUser.id);
+
+    // Format readable time string for message
+    const formattedDate = startTimestamp.toLocaleDateString('en-CA');
+    const formattedTime = isAllDay ? 'All Day' : startTimestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    for (const recipientId of recipientIds) {
+      await query(`
+        INSERT INTO notifications (user_id, title, message, type, link)
+        VALUES ($1, $2, $3, 'calendar_event', '/calendar');
+      `, [
+        recipientId,
+        `New Event: ${r.title}`,
+        `${r.title} scheduled for ${formattedDate} (${formattedTime}).`
+      ]);
+    }
+
+    const sDate = new Date(r.start_date);
+    const eDate = new Date(r.end_date);
 
     return sendSuccess(res, {
       event: {
@@ -646,29 +1072,74 @@ async function handleCalendar(action, payload, authUser, res) {
         title: r.title,
         description: r.description,
         type: r.type,
-        startDate: r.start_date,
-        endDate: r.end_date,
-        date: new Date(r.start_date).toISOString().split('T')[0],
-        time: new Date(r.start_date).toTimeString().substring(0, 5),
+        startDate: sDate.toISOString(),
+        endDate: eDate.toISOString(),
+        date: sDate.toLocaleDateString('en-CA'),
+        time: sDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
         location: r.location,
         isAllDay: r.is_all_day,
         projectId: r.project_id,
         teamId: r.team_id,
-        attendees: attendees || []
+        department: r.department,
+        creatorId: r.creator_id,
+        attendees: safeAttendees
       }
     }, 'Event created', 201);
   }
 
   if (action === 'update') {
-    const { id, title, description, type, startDate, endDate, location, isAllDay, projectId, teamId, attendees } = payload;
-    
-    let startTimestamp = startDate ? new Date(startDate) : undefined;
-    let endTimestamp = endDate ? new Date(endDate) : undefined;
+    // RBAC: Team Member cannot edit events
+    if (authUser.role === 'team_member') {
+      return sendError(res, 403, 'FORBIDDEN', 'Team members do not have permission to edit calendar events');
+    }
 
-    const validTypes = ['meeting', 'milestone', 'deadline', 'team_event', 'company_event', 'reminder'];
-    const eventType = type && validTypes.includes(type.toLowerCase()) ? type.toLowerCase() : undefined;
+    const {
+      id,
+      title,
+      description,
+      type,
+      startDate,
+      endDate,
+      location,
+      isAllDay,
+      projectId,
+      teamId,
+      department,
+      attendees
+    } = payload;
 
-    await query(`
+    if (!id) return sendError(res, 400, 'VALIDATION_ERROR', 'Event ID is required');
+
+    // Check authorization for Team Leader
+    const prevRes = await query(`SELECT * FROM calendar_events WHERE id = $1;`, [id]);
+    const prevEvent = prevRes.rows[0];
+    if (!prevEvent) return sendError(res, 404, 'NOT_FOUND', 'Event not found');
+
+    if (authUser.role === 'project_manager') {
+      const isCreator = prevEvent.creator_id === authUser.id;
+      let hasTeamAuth = false;
+      if (prevEvent.team_id) {
+        const teamCheck = await query(`SELECT 1 FROM teams WHERE id = $1 AND leader_id = $2;`, [prevEvent.team_id, authUser.id]);
+        hasTeamAuth = Boolean(teamCheck.rows.length);
+      }
+      let hasProjectAuth = false;
+      if (prevEvent.project_id) {
+        const projCheck = await query(`
+          SELECT 1 FROM projects WHERE id = $1 AND manager_id = $2
+          UNION
+          SELECT 1 FROM project_teams pt
+          JOIN teams t ON t.id = pt.team_id
+          WHERE pt.project_id = $1 AND t.leader_id = $2;
+        `, [prevEvent.project_id, authUser.id]);
+        hasProjectAuth = Boolean(projCheck.rows.length);
+      }
+
+      if (!isCreator && !hasTeamAuth && !hasProjectAuth) {
+        return sendError(res, 403, 'FORBIDDEN', 'You do not have authorization to edit this event');
+      }
+    }
+
+    const updateRes = await query(`
       UPDATE calendar_events
       SET title = COALESCE($2, title),
           description = COALESCE($3, description),
@@ -679,23 +1150,188 @@ async function handleCalendar(action, payload, authUser, res) {
           is_all_day = COALESCE($8, is_all_day),
           project_id = $9,
           team_id = $10,
+          department = $11,
           updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1;
-    `, [id, title, description, eventType, startTimestamp, endTimestamp, location, isAllDay, projectId || null, teamId || null]);
+      WHERE id = $1
+      RETURNING *;
+    `, [
+      id,
+      title,
+      description,
+      eventType,
+      startTimestamp,
+      endTimestamp,
+      location,
+      isAllDay,
+      projectId || null,
+      teamId || null,
+      department || null
+    ]);
+
+    const updatedEvent = updateRes.rows[0];
 
     if (Array.isArray(attendees)) {
       await query(`DELETE FROM calendar_event_attendees WHERE event_id = $1;`, [id]);
       for (const uid of attendees) {
-        await query(`INSERT INTO calendar_event_attendees (event_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [id, uid]);
+        await query(`
+          INSERT INTO calendar_event_attendees (event_id, user_id)
+          VALUES ($1, $2)
+          ON CONFLICT DO NOTHING;
+        `, [id, uid]);
       }
+    }
+
+    // Notify participants about the update
+    const recipientIds = new Set();
+    const effectiveType = updatedEvent.type;
+    const atts = await query(`SELECT user_id FROM calendar_event_attendees WHERE event_id = $1;`, [id]);
+    const isCompanyWide = effectiveType === 'company_event' || (!updatedEvent.project_id && !updatedEvent.team_id && !updatedEvent.department && atts.rows.length === 0);
+
+    if (isCompanyWide) {
+      const allUsers = await query(`SELECT id FROM users WHERE status != 'Inactive';`);
+      allUsers.rows.forEach(u => recipientIds.add(u.id));
+    } else {
+      if (updatedEvent.department) {
+        const deptUsers = await query(`SELECT id FROM users WHERE department = $1 AND status != 'Inactive';`, [updatedEvent.department]);
+        deptUsers.rows.forEach(u => recipientIds.add(u.id));
+      }
+      if (updatedEvent.team_id) {
+        const teamUsers = await query(`
+          SELECT user_id FROM team_members tm
+          JOIN users u ON u.id = tm.user_id
+          WHERE tm.team_id = $1 AND u.status != 'Inactive'
+          UNION
+          SELECT leader_id FROM teams WHERE id = $1 AND leader_id IS NOT NULL;
+        `, [updatedEvent.team_id]);
+        teamUsers.rows.forEach(u => recipientIds.add(u.user_id));
+      }
+      if (updatedEvent.project_id) {
+        const projUsers = await query(`
+          SELECT tm.user_id
+          FROM project_teams pt
+          JOIN team_members tm ON tm.team_id = pt.team_id
+          JOIN users u ON u.id = tm.user_id
+          WHERE pt.project_id = $1 AND u.status != 'Inactive'
+          UNION
+          SELECT manager_id FROM projects WHERE id = $1 AND manager_id IS NOT NULL;
+        `, [updatedEvent.project_id]);
+        projUsers.rows.forEach(u => recipientIds.add(u.user_id));
+      }
+      atts.rows.forEach(a => recipientIds.add(a.user_id));
+    }
+
+    recipientIds.delete(authUser.id);
+
+    const sDate = new Date(updatedEvent.start_date);
+    const dateFormatted = sDate.toLocaleDateString('en-CA');
+    const timeFormatted = updatedEvent.is_all_day ? 'All Day' : sDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    for (const recipientId of recipientIds) {
+      await query(`
+        INSERT INTO notifications (user_id, title, message, type, link)
+        VALUES ($1, $2, $3, 'calendar_event', '/calendar');
+      `, [
+        recipientId,
+        `Event Updated: ${updatedEvent.title}`,
+        `${updatedEvent.title} has been updated. Scheduled for ${dateFormatted} (${timeFormatted}).`
+      ]);
     }
 
     return sendSuccess(res, { id }, 'Event updated');
   }
 
   if (action === 'delete') {
-    await query('DELETE FROM calendar_events WHERE id = $1', [payload.id]);
-    return sendSuccess(res, { id: payload.id }, 'Event deleted');
+    // RBAC: Team Member cannot delete events
+    if (authUser.role === 'team_member') {
+      return sendError(res, 403, 'FORBIDDEN', 'Team members do not have permission to delete calendar events');
+    }
+
+    const { id } = payload;
+    if (!id) return sendError(res, 400, 'VALIDATION_ERROR', 'Event ID is required');
+
+    // Fetch details before deletion to check authorization & notify attendees
+    const evtRes = await query(`SELECT * FROM calendar_events WHERE id = $1;`, [id]);
+    const evt = evtRes.rows[0];
+    if (!evt) return sendError(res, 404, 'NOT_FOUND', 'Event not found');
+
+    if (authUser.role === 'project_manager') {
+      const isCreator = evt.creator_id === authUser.id;
+      let hasTeamAuth = false;
+      if (evt.team_id) {
+        const teamCheck = await query(`SELECT 1 FROM teams WHERE id = $1 AND leader_id = $2;`, [evt.team_id, authUser.id]);
+        hasTeamAuth = Boolean(teamCheck.rows.length);
+      }
+      let hasProjectAuth = false;
+      if (evt.project_id) {
+        const projCheck = await query(`
+          SELECT 1 FROM projects WHERE id = $1 AND manager_id = $2
+          UNION
+          SELECT 1 FROM project_teams pt
+          JOIN teams t ON t.id = pt.team_id
+          WHERE pt.project_id = $1 AND t.leader_id = $2;
+        `, [evt.project_id, authUser.id]);
+        hasProjectAuth = Boolean(projCheck.rows.length);
+      }
+
+      if (!isCreator && !hasTeamAuth && !hasProjectAuth) {
+        return sendError(res, 403, 'FORBIDDEN', 'You do not have authorization to delete this event');
+      }
+    }
+
+    if (evt) {
+      const recipientIds = new Set();
+      const atts = await query(`SELECT user_id FROM calendar_event_attendees WHERE event_id = $1;`, [id]);
+      const isCompanyWide = evt.type === 'company_event' || (!evt.project_id && !evt.team_id && !evt.department && atts.rows.length === 0);
+
+      if (isCompanyWide) {
+        const allUsers = await query(`SELECT id FROM users WHERE status != 'Inactive';`);
+        allUsers.rows.forEach(u => recipientIds.add(u.id));
+      } else {
+        if (evt.department) {
+          const deptUsers = await query(`SELECT id FROM users WHERE department = $1 AND status != 'Inactive';`, [evt.department]);
+          deptUsers.rows.forEach(u => recipientIds.add(u.id));
+        }
+        if (evt.team_id) {
+          const teamUsers = await query(`
+            SELECT user_id FROM team_members tm
+            JOIN users u ON u.id = tm.user_id
+            WHERE tm.team_id = $1 AND u.status != 'Inactive'
+            UNION
+            SELECT leader_id FROM teams WHERE id = $1 AND leader_id IS NOT NULL;
+          `, [evt.team_id]);
+          teamUsers.rows.forEach(u => recipientIds.add(u.user_id));
+        }
+        if (evt.project_id) {
+          const projUsers = await query(`
+            SELECT tm.user_id
+            FROM project_teams pt
+            JOIN team_members tm ON tm.team_id = pt.team_id
+            JOIN users u ON u.id = tm.user_id
+            WHERE pt.project_id = $1 AND u.status != 'Inactive'
+            UNION
+            SELECT manager_id FROM projects WHERE id = $1 AND manager_id IS NOT NULL;
+          `, [evt.project_id]);
+          projUsers.rows.forEach(u => recipientIds.add(u.user_id));
+        }
+        atts.rows.forEach(a => recipientIds.add(a.user_id));
+      }
+
+      recipientIds.delete(authUser.id);
+
+      for (const recipientId of recipientIds) {
+        await query(`
+          INSERT INTO notifications (user_id, title, message, type, link)
+          VALUES ($1, $2, $3, 'calendar_event', '/calendar');
+        `, [
+          recipientId,
+          `Event Cancelled: ${evt.title}`,
+          `The scheduled event "${evt.title}" has been cancelled.`
+        ]);
+      }
+    }
+
+    await query('DELETE FROM calendar_events WHERE id = $1', [id]);
+    return sendSuccess(res, { id }, 'Event deleted');
   }
 }
 
@@ -745,7 +1381,9 @@ async function handleAnnouncements(action, payload, authUser, res) {
       tag: r.tag,
       targetDepartment: r.target_department,
       author: r.author_name || 'Admin',
-      publishedDate: to_char ? r.published_date : new Date(r.created_at).toISOString().split('T')[0]
+      publishedDate: r.published_date
+        ? new Date(r.published_date).toISOString().split('T')[0]
+        : new Date(r.created_at).toISOString().split('T')[0]
     }));
     return sendSuccess(res, { announcements }, 'Announcements retrieved');
   }
@@ -773,7 +1411,7 @@ async function handleAnnouncements(action, payload, authUser, res) {
     for (const uid of targetUsers) {
       await query(`
         INSERT INTO notifications (user_id, title, message, type, link)
-        VALUES ($1, $2, $3, 'announcement', '/notifications');
+        VALUES ($1, $2, $3, 'announcement', '/messages');
       `, [uid, `Company Announcement: ${title}`, content || title]);
     }
 
@@ -790,44 +1428,459 @@ async function handleAnnouncements(action, payload, authUser, res) {
 }
 
 // -------------------------------------------------------------
-// CONVERSATIONS HANDLER
+// CONVERSATIONS HANDLER (Neon DB Backend)
 // -------------------------------------------------------------
-async function handleConversations(action, payload, authUser, res) {
-  if (action === 'list') {
-    const convRes = await query(`
-      SELECT c.id, c.name, c.type FROM conversations c
-      JOIN conversation_participants cp ON cp.conversation_id = c.id WHERE cp.user_id = $1;
-    `, [authUser.id]);
-    const conversations = convRes.rows.map(c => ({ id: c.id, name: c.name, type: c.type, unread: 0 }));
+let lastCoreChannelsSync = 0;
+const CORE_CHANNELS_SYNC_INTERVAL_MS = 60000;
 
-    let messages = {};
-    if (conversations.length > 0) {
-      const msgRes = await query(`
-        SELECT m.id, m.conversation_id, m.sender_id, u.name as sender_name, m.text, m.created_at
-        FROM messages m JOIN users u ON u.id = m.sender_id
-        WHERE m.conversation_id = ANY($1::UUID[]) ORDER BY m.created_at ASC;
-      `, [conversations.map(c => c.id)]);
-      conversations.forEach(c => { messages[c.id] = []; });
-      msgRes.rows.forEach(m => {
-        if (!messages[m.conversation_id]) messages[m.conversation_id] = [];
-        messages[m.conversation_id].push({
-          id: m.id, senderId: m.sender_id, senderName: m.sender_name, text: m.text,
-          timestamp: new Date(m.created_at).toTimeString().substring(0, 5)
-        });
-      });
+async function handleConversations(action, payload, authUser, res) {
+  const ensureCoreChannels = async (force = false) => {
+    const now = Date.now();
+    if (!force && (now - lastCoreChannelsSync < CORE_CHANNELS_SYNC_INTERVAL_MS)) {
+      return;
     }
-    return sendSuccess(res, { conversations, messages }, 'Conversations retrieved');
+    lastCoreChannelsSync = now;
+    // Company-wide announcement channel.
+    let announcement = await query(`
+      SELECT id FROM conversations WHERE type = 'announcements' LIMIT 1;
+    `);
+    let announcementId = announcement.rows[0]?.id;
+    if (!announcementId) {
+      announcement = await query(`
+        INSERT INTO conversations (name, type, is_read_only)
+        VALUES ('Company Announcements', 'announcements', true)
+        RETURNING id;
+      `);
+      announcementId = announcement.rows[0].id;
+    }
+    await query(`
+      INSERT INTO conversation_participants (conversation_id, user_id)
+      SELECT $1, id FROM users WHERE status != 'Inactive'
+      ON CONFLICT (conversation_id, user_id) DO NOTHING;
+    `, [announcementId]);
+
+    // One channel per department; membership follows current department assignment.
+    const departments = await query(`
+      SELECT DISTINCT department FROM users
+      WHERE department IS NOT NULL AND department <> '' AND status != 'Inactive';
+    `);
+    for (const { department } of departments.rows) {
+      let room = await query(`
+        SELECT id FROM conversations
+        WHERE type = 'department' AND department = $1 LIMIT 1;
+      `, [department]);
+      let roomId = room.rows[0]?.id;
+      if (!roomId) {
+        room = await query(`
+          INSERT INTO conversations (name, type, department, is_read_only)
+          VALUES ($1, 'department', $2, false) RETURNING id;
+        `, [`${department} — Department Group`, department]);
+        roomId = room.rows[0].id;
+      }
+      await query(`
+        INSERT INTO conversation_participants (conversation_id, user_id)
+        SELECT $1, id FROM users
+        WHERE department = $2 AND status != 'Inactive'
+        ON CONFLICT (conversation_id, user_id) DO NOTHING;
+      `, [roomId, department]);
+    }
+
+    // Ensure project channels exist and sync their assigned team members.
+    const projects = await query(`
+      SELECT id, name, status, manager_id FROM projects;
+    `);
+    for (const project of projects.rows) {
+      let room = await query(`
+        SELECT id FROM conversations
+        WHERE type = 'project' AND project_id = $1 LIMIT 1;
+      `, [project.id]);
+      let roomId = room.rows[0]?.id;
+      const readOnly = ['archived', 'completed'].includes(String(project.status || '').toLowerCase());
+      if (!roomId) {
+        room = await query(`
+          INSERT INTO conversations (name, type, project_id, is_read_only)
+          VALUES ($1, 'project', $2, $3) RETURNING id;
+        `, [`${project.name} — Project Group`, project.id, readOnly]);
+        roomId = room.rows[0].id;
+      } else {
+        await query(`
+          UPDATE conversations SET name = $1, is_read_only = $2 WHERE id = $3;
+        `, [`${project.name} — Project Group`, readOnly, roomId]);
+      }
+      if (project.manager_id) {
+        await query(`
+          INSERT INTO conversation_participants (conversation_id, user_id)
+          SELECT $1, id FROM users WHERE id = $2 AND status != 'Inactive'
+          ON CONFLICT (conversation_id, user_id) DO NOTHING;
+        `, [roomId, project.manager_id]);
+      }
+      await query(`
+        INSERT INTO conversation_participants (conversation_id, user_id)
+        SELECT $1, tm.user_id
+        FROM project_teams pt
+        JOIN team_members tm ON tm.team_id = pt.team_id
+        JOIN users u ON u.id = tm.user_id
+        WHERE pt.project_id = $2 AND u.status != 'Inactive'
+        ON CONFLICT (conversation_id, user_id) DO NOTHING;
+      `, [roomId, project.id]);
+    }
+  };
+
+  if (action === 'list') {
+    await ensureCoreChannels();
+    // Capture the cursor before reading messages so concurrent sends are picked up by sync.
+    const cursorResult = await query('SELECT NOW() AS "syncCursor";');
+    const conversationsResult = authUser.role === 'admin'
+      ? await query(`
+          SELECT c.id, c.name,
+            CASE WHEN c.type = 'direct' THEN 'dm' ELSE c.type::text END AS type,
+            c.department, c.project_id AS "projectId",
+            c.is_read_only AS "isReadOnly", c.created_at AS "createdAt",
+            c.last_message AS "lastMessage", c.last_message_at AS "lastMessageAt",
+            COALESCE(cp.is_pinned, false) AS pinned,
+            COALESCE(cp.is_muted, false) AS muted,
+            cp.last_read_at AS "lastReadAt",
+            COALESCE((SELECT json_agg(p.user_id) FROM conversation_participants p
+                      WHERE p.conversation_id = c.id), '[]'::json) AS "participantIds"
+          FROM conversations c
+          LEFT JOIN conversation_participants cp
+            ON cp.conversation_id = c.id AND cp.user_id = $1
+          ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC;
+        `, [authUser.id])
+      : await query(`
+          SELECT c.id, c.name,
+            CASE WHEN c.type = 'direct' THEN 'dm' ELSE c.type::text END AS type,
+            c.department, c.project_id AS "projectId",
+            c.is_read_only AS "isReadOnly", c.created_at AS "createdAt",
+            c.last_message AS "lastMessage", c.last_message_at AS "lastMessageAt",
+            cp.is_pinned AS pinned, cp.is_muted AS muted,
+            cp.last_read_at AS "lastReadAt",
+            COALESCE((SELECT json_agg(p.user_id) FROM conversation_participants p
+                      WHERE p.conversation_id = c.id), '[]'::json) AS "participantIds"
+          FROM conversations c
+          JOIN conversation_participants cp
+            ON cp.conversation_id = c.id AND cp.user_id = $1
+          ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC;
+        `, [authUser.id]);
+
+    const conversations = conversationsResult.rows;
+    const messages = {};
+    if (conversations.length) {
+      const ids = conversations.map(conversation => conversation.id);
+      // Optimized: limit initial retrieval to most recent 50 messages per conversation to guarantee instant load
+      const messageResult = await query(`
+        SELECT m.id, m.conversation_id AS "conversationId",
+          m.sender_id AS "senderId", COALESCE(u.name, 'Unknown User') AS "senderName",
+          m.text, m.reply_to_id AS "replyToId", m.is_edited AS edited,
+          m.is_deleted AS deleted, m.title, m.priority,
+          m.is_announcement AS "isAnnouncement", m.created_at AS timestamp,
+          COALESCE((
+            SELECT json_object_agg(reaction.emoji, reaction.user_ids)
+            FROM (
+              SELECT emoji, json_agg(user_id) AS user_ids
+              FROM message_reactions WHERE message_id = m.id GROUP BY emoji
+            ) reaction
+          ), '{}'::json) AS reactions
+        FROM (
+          SELECT *, ROW_NUMBER() OVER (PARTITION BY conversation_id ORDER BY created_at DESC) as rn
+          FROM messages
+          WHERE conversation_id = ANY($1::uuid[])
+        ) m
+        LEFT JOIN users u ON u.id = m.sender_id
+        WHERE m.rn <= 50
+        ORDER BY m.created_at ASC;
+      `, [ids]);
+      conversations.forEach(conversation => { messages[conversation.id] = []; });
+      messageResult.rows.forEach(message => messages[message.conversationId].push(message));
+    }
+    return sendSuccess(res, { conversations, messages, syncCursor: cursorResult.rows[0].syncCursor }, 'Conversations retrieved');
+  }
+
+  // Incremental sync: only conversation metadata and messages changed since cursor.
+  if (action === 'sync') {
+    const since = payload.since && !Number.isNaN(Date.parse(payload.since))
+      ? new Date(payload.since)
+      : new Date(0);
+
+    const cursorResult = await query('SELECT NOW() AS "syncCursor";');
+    const conversationsResult = authUser.role === 'admin'
+      ? await query(`
+          SELECT c.id, c.name,
+            CASE WHEN c.type = 'direct' THEN 'dm' ELSE c.type::text END AS type,
+            c.department, c.project_id AS "projectId",
+            c.is_read_only AS "isReadOnly", c.created_at AS "createdAt",
+            c.last_message AS "lastMessage", c.last_message_at AS "lastMessageAt",
+            COALESCE(cp.is_pinned, false) AS pinned,
+            COALESCE(cp.is_muted, false) AS muted,
+            cp.last_read_at AS "lastReadAt",
+            COALESCE((SELECT json_agg(p.user_id) FROM conversation_participants p
+                      WHERE p.conversation_id = c.id), '[]'::json) AS "participantIds"
+          FROM conversations c
+          LEFT JOIN conversation_participants cp
+            ON cp.conversation_id = c.id AND cp.user_id = $1
+          WHERE c.created_at > $2 OR c.last_message_at > $2
+          ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC;
+        `, [authUser.id, since])
+      : await query(`
+          SELECT c.id, c.name,
+            CASE WHEN c.type = 'direct' THEN 'dm' ELSE c.type::text END AS type,
+            c.department, c.project_id AS "projectId",
+            c.is_read_only AS "isReadOnly", c.created_at AS "createdAt",
+            c.last_message AS "lastMessage", c.last_message_at AS "lastMessageAt",
+            cp.is_pinned AS pinned, cp.is_muted AS muted,
+            cp.last_read_at AS "lastReadAt",
+            COALESCE((SELECT json_agg(p.user_id) FROM conversation_participants p
+                      WHERE p.conversation_id = c.id), '[]'::json) AS "participantIds"
+          FROM conversations c
+          JOIN conversation_participants cp
+            ON cp.conversation_id = c.id AND cp.user_id = $1
+          WHERE c.created_at > $2 OR c.last_message_at > $2
+          ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC;
+        `, [authUser.id, since]);
+
+    const changedResult = await query(`
+      SELECT m.id, m.conversation_id AS "conversationId",
+        m.sender_id AS "senderId", COALESCE(u.name, 'Unknown User') AS "senderName",
+        m.text, m.reply_to_id AS "replyToId", m.is_edited AS edited,
+        m.is_deleted AS deleted, m.title, m.priority,
+        m.is_announcement AS "isAnnouncement", m.created_at AS timestamp,
+        m.updated_at AS "updatedAt",
+        COALESCE((
+          SELECT json_object_agg(reaction.emoji, reaction.user_ids)
+          FROM (
+            SELECT emoji, json_agg(user_id) AS user_ids
+            FROM message_reactions WHERE message_id = m.id GROUP BY emoji
+          ) reaction
+        ), '{}'::json) AS reactions
+      FROM messages m
+      LEFT JOIN users u ON u.id = m.sender_id
+      WHERE m.updated_at > $1
+        AND ($2 = 'admin' OR EXISTS (
+          SELECT 1 FROM conversation_participants cp
+          WHERE cp.conversation_id = m.conversation_id AND cp.user_id = $3
+        ))
+      ORDER BY m.created_at ASC;
+    `, [since, authUser.role, authUser.id]);
+    const changedMessages = changedResult.rows;
+
+    return sendSuccess(res, {
+      conversations: conversationsResult.rows,
+      messages: changedMessages,
+      syncCursor: cursorResult.rows[0].syncCursor,
+    }, 'Messaging updates retrieved');
   }
 
   if (action === 'create') {
-    const { conversationId, text } = payload;
-    const resMsg = await query(`
-      INSERT INTO messages (conversation_id, sender_id, text) VALUES ($1, $2, $3) RETURNING *;
-    `, [conversationId, authUser.id, text.trim()]);
-    const m = resMsg.rows[0];
-    return sendSuccess(res, {
-      message: { id: m.id, senderId: m.sender_id, senderName: authUser.name, text: m.text, timestamp: new Date(m.created_at).toTimeString().substring(0, 5) }
-    }, 'Message sent', 201);
-  }
-}
+    const { conversationId, text, replyToId = null, title = null, priority = 'normal' } = payload;
+    if (!conversationId || (!text?.trim() && !title?.trim())) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Conversation and message content are required');
+    }
+    const [conversationResult, membership, reply] = await Promise.all([
+      query(`SELECT id, type, is_read_only FROM conversations WHERE id = $1;`, [conversationId]),
+      query(`SELECT 1 FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2;`, [conversationId, authUser.id]),
+      replyToId
+        ? query(`SELECT id FROM messages WHERE id = $1 AND conversation_id = $2 AND is_deleted = false;`, [replyToId, conversationId])
+        : Promise.resolve({ rows: [{ id: null }] }),
+    ]);
+    const conversation = conversationResult.rows[0];
+    if (!conversation) return sendError(res, 404, 'NOT_FOUND', 'Conversation not found');
+    if (conversation.is_read_only && !(conversation.type === 'announcements' && authUser.role === 'admin')) {
+      return sendError(res, 403, 'FORBIDDEN', 'This conversation is read-only');
+    }
+    if (conversation.type === 'announcements' && authUser.role !== 'admin') {
+      return sendError(res, 403, 'FORBIDDEN', 'Only administrators can publish announcements');
+    }
+    if (!membership.rows.length && authUser.role !== 'admin') {
+      return sendError(res, 403, 'FORBIDDEN', 'You are not a participant in this conversation');
+    }
+    if (replyToId && !reply.rows.length) {
+      return sendError(res, 400, 'INVALID_REPLY', 'Reply target is invalid');
+    }
+    const announcement = conversation.type === 'announcements';
+    const validPriority = ['normal', 'important', 'urgent'].includes(priority) ? priority : 'normal';
+    const inserted = await query(`
+      INSERT INTO messages (
+        conversation_id, sender_id, text, reply_to_id, title, priority, is_announcement
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, conversation_id AS "conversationId", sender_id AS "senderId",
+        text, reply_to_id AS "replyToId", is_edited AS edited, is_deleted AS deleted,
+        title, priority, is_announcement AS "isAnnouncement", created_at AS timestamp;
+    `, [conversationId, authUser.id, text || '', replyToId, announcement ? title : null, validPriority, announcement]);
+    const message = inserted.rows[0];
+    message.senderName = authUser.name;
+    message.reactions = {};
 
+    // Update conversation metadata
+    await query(`
+      UPDATE conversations
+      SET last_message = $1, last_message_at = CURRENT_TIMESTAMP
+      WHERE id = $2;
+    `, [(title || text || '').slice(0, 200), conversationId]);
+
+    // Only create notifications for company announcements, NEVER for direct/group chat messages
+    if (announcement) {
+      await query(`
+        INSERT INTO notifications (user_id, title, message, type, link)
+        SELECT cp.user_id, $3, $4, 'announcement'::notification_type, '/messages'
+        FROM conversation_participants cp
+        WHERE cp.conversation_id = $1 AND cp.user_id <> $2 AND cp.is_muted = false
+        ON CONFLICT DO NOTHING;
+      `, [conversationId, authUser.id, 'New Company Announcement', (title || text || '').slice(0, 200)]);
+    }
+
+    return sendSuccess(res, { message }, 'Message sent', 201);
+  }
+
+  if (action === 'edit') {
+    const { messageId, text } = payload;
+    if (!messageId || !text?.trim()) return sendError(res, 400, 'VALIDATION_ERROR', 'Message ID and text are required');
+
+    // 1. Fetch the target message
+    const targetRes = await query(`
+      SELECT id, conversation_id, sender_id, created_at, is_deleted
+      FROM messages
+      WHERE id = $1;
+    `, [messageId]);
+
+    if (!targetRes.rows.length) {
+      return sendError(res, 404, 'NOT_FOUND', 'Message not found');
+    }
+
+    const msg = targetRes.rows[0];
+
+    // 2. Must belong to the currently authenticated user
+    if (msg.sender_id !== authUser.id) {
+      return sendError(res, 403, 'FORBIDDEN', 'You can only edit your own messages');
+    }
+
+    // 3. Cannot edit deleted messages
+    if (msg.is_deleted) {
+      return sendError(res, 400, 'INVALID_STATE', 'Cannot edit a deleted message');
+    }
+
+    // 4. Must be within the 10-minute window of original creation
+    const messageAgeMs = Date.now() - new Date(msg.created_at).getTime();
+    const tenMinutesMs = 10 * 60 * 1000;
+    if (messageAgeMs > tenMinutesMs) {
+      return sendError(res, 403, 'TIME_LIMIT_EXCEEDED', 'Messages can only be edited within 10 minutes of sending');
+    }
+
+    // 5. Must be the user's most recent message in this conversation
+    const newerRes = await query(`
+      SELECT id FROM messages
+      WHERE conversation_id = $1 AND sender_id = $2 AND created_at > $3 AND is_deleted = false
+      LIMIT 1;
+    `, [msg.conversation_id, authUser.id, msg.created_at]);
+
+    if (newerRes.rows.length > 0) {
+      return sendError(res, 403, 'NOT_LATEST_MESSAGE', 'Only your most recent message in this conversation can be edited');
+    }
+
+    // 6. User must still be an authorized participant
+    const partRes = await query(`
+      SELECT 1 FROM conversation_participants
+      WHERE conversation_id = $1 AND user_id = $2;
+    `, [msg.conversation_id, authUser.id]);
+
+    if (!partRes.rows.length && authUser.role !== 'admin') {
+      return sendError(res, 403, 'FORBIDDEN', 'You are not a participant in this conversation');
+    }
+
+    // 7. Update content preserving sender, conversation, and original created_at
+    const result = await query(`
+      UPDATE messages
+      SET text = $1, is_edited = true, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING id, text, is_edited AS edited, updated_at;
+    `, [text.trim(), messageId]);
+
+    return sendSuccess(res, { message: result.rows[0] }, 'Message edited');
+  }
+
+  if (action === 'delete') {
+    return sendError(res, 403, 'FORBIDDEN', 'Message deletion is disabled');
+  }
+
+  if (action === 'react') {
+    const { messageId, emoji } = payload;
+    if (!messageId || !emoji || emoji.length > 20) return sendError(res, 400, 'VALIDATION_ERROR', 'Valid message ID and emoji are required');
+    const allowed = await query(`
+      SELECT m.id FROM messages m
+      JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id
+      WHERE m.id = $1 AND cp.user_id = $2 AND m.is_deleted = false;
+    `, [messageId, authUser.id]);
+    if (!allowed.rows.length) return sendError(res, 403, 'FORBIDDEN', 'Cannot react to this message');
+    const removed = await query(`
+      DELETE FROM message_reactions
+      WHERE message_id = $1 AND user_id = $2 AND emoji = $3 RETURNING message_id;
+    `, [messageId, authUser.id, emoji]);
+    if (!removed.rows.length) {
+      await query(`
+        INSERT INTO message_reactions (message_id, user_id, emoji)
+        VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;
+      `, [messageId, authUser.id, emoji]);
+    }
+    await query(`UPDATE messages SET updated_at = CURRENT_TIMESTAMP WHERE id = $1;`, [messageId]);
+    return sendSuccess(res, { messageId, emoji }, 'Reaction updated');
+  }
+
+  if (action === 'start-dm') {
+    const { targetUserId } = payload;
+    if (!targetUserId || targetUserId === authUser.id) return sendError(res, 400, 'VALIDATION_ERROR', 'A different target user is required');
+    const target = await query(`
+      SELECT id, name FROM users WHERE id = $1 AND status != 'Inactive';
+    `, [targetUserId]);
+    if (!target.rows[0]) return sendError(res, 404, 'NOT_FOUND', 'User not found or inactive');
+    const existing = await query(`
+      SELECT c.id FROM conversations c
+      JOIN conversation_participants p1 ON p1.conversation_id = c.id AND p1.user_id = $1
+      JOIN conversation_participants p2 ON p2.conversation_id = c.id AND p2.user_id = $2
+      WHERE c.type = 'direct'
+        AND (SELECT COUNT(*) FROM conversation_participants p WHERE p.conversation_id = c.id) = 2
+      LIMIT 1;
+    `, [authUser.id, targetUserId]);
+    if (existing.rows[0]) return sendSuccess(res, { conversationId: existing.rows[0].id }, 'Direct conversation exists');
+
+    const created = await query(`
+      INSERT INTO conversations (name, type) VALUES ($1, 'direct') RETURNING id;
+    `, [`DM with ${target.rows[0].name}`]);
+    const conversationId = created.rows[0].id;
+    await query(`
+      INSERT INTO conversation_participants (conversation_id, user_id)
+      VALUES ($1, $2), ($1, $3) ON CONFLICT (conversation_id, user_id) DO NOTHING;
+    `, [conversationId, authUser.id, targetUserId]);
+    return sendSuccess(res, { conversationId }, 'Direct conversation created', 201);
+  }
+
+  if (action === 'update-settings') {
+    const { conversationId, pinned, muted, markRead } = payload;
+    if (!conversationId) return sendError(res, 400, 'VALIDATION_ERROR', 'Conversation ID is required');
+
+    // Admin can view/read any conversation even if not explicitly pre-enrolled
+    let member = await query(`
+      SELECT 1 FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2;
+    `, [conversationId, authUser.id]);
+
+    if (!member.rows.length) {
+      if (authUser.role === 'admin') {
+        await query(`
+          INSERT INTO conversation_participants (conversation_id, user_id)
+          VALUES ($1, $2) ON CONFLICT (conversation_id, user_id) DO NOTHING;
+        `, [conversationId, authUser.id]);
+      } else {
+        return sendError(res, 403, 'FORBIDDEN', 'You are not a participant in this conversation');
+      }
+    }
+
+    await query(`
+      UPDATE conversation_participants
+      SET is_pinned = COALESCE($1, is_pinned),
+          is_muted = COALESCE($2, is_muted),
+          last_read_at = CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE last_read_at END
+      WHERE conversation_id = $4 AND user_id = $5;
+    `, [pinned ?? null, muted ?? null, Boolean(markRead), conversationId, authUser.id]);
+    return sendSuccess(res, { conversationId }, 'Conversation settings updated');
+  }
+
+  return sendError(res, 400, 'UNKNOWN_ACTION', 'Unsupported conversation action');
+}

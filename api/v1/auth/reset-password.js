@@ -14,7 +14,7 @@ export default async function handler(req, res) {
 
   // Rate Limiting: 5 attempts per 10 minutes per IP
   const clientIp = getClientIp(req);
-  const rateLimit = checkRateLimit(`reset-pwd:${clientIp}`, 5, 600);
+  const rateLimit = await checkRateLimit(`reset-pwd:${clientIp}`, 5, 600);
 
   if (!rateLimit.allowed) {
     res.setHeader('Retry-After', rateLimit.resetSeconds.toString());

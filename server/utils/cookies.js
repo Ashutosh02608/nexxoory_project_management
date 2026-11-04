@@ -31,7 +31,6 @@ export function clearRefreshCookie() {
     sameSite: 'strict',
     path: '/api/v1/auth',
     maxAge: 0,
-    path: '/api/v1/auth',
     domain: env.COOKIE_DOMAIN,
   });
 }

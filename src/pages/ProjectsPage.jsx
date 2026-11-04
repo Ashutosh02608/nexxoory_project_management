@@ -19,9 +19,10 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getInitials } from '../utils/avatar';
+import { ScopeRules } from '../config/rbac';
 
 export default function ProjectsPage() {
-  const { projects, updateProject, removeProject, users, teams, permissions } = useApp();
+  const { projects, updateProject, removeProject, users, teams, currentUser, permissions } = useApp();
 
   const [viewMode, setViewMode] = useState('grid'); // 'grid', 'list', 'table'
   const [search, setSearch] = useState('');
@@ -100,8 +101,11 @@ export default function ProjectsPage() {
     }
   };
 
+  // Scoped projects based on user role and assignment
+  const scopedProjects = ScopeRules.filterProjects(projects, currentUser, teams);
+
   // Filtered projects
-  const filtered = projects.filter(p => {
+  const filtered = scopedProjects.filter(p => {
     const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase()) ||
       p.description.toLowerCase().includes(search.toLowerCase());
     const matchesStatus = statusFilter === 'ALL' || p.status === statusFilter;

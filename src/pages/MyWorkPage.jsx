@@ -2,16 +2,16 @@ import React, { useState } from 'react';
 import { CheckSquare, Clock, AlertTriangle, CheckCircle2, ArrowRight } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getInitials } from '../utils/avatar';
+import { ScopeRules } from '../config/rbac';
 
 export default function MyWorkPage() {
-  const { currentUser, tasks, projects, updateTask } = useApp();
+  const { currentUser, tasks, projects, teams, updateTask } = useApp();
 
   const [activeTab, setActiveTab] = useState('tasks'); // 'tasks', 'projects', 'history'
 
-  // Current user's tasks: directly assigned to user OR assigned to user's team
-  const userTeamIds = useApp().teams?.filter(tm => tm.memberIds?.includes(currentUser?.id) || tm.leaderId === currentUser?.id).map(tm => tm.id) || [];
-  const myTasks = tasks.filter(t => t.assigneeId === currentUser?.id || (!t.assigneeId && t.teamId && userTeamIds.includes(t.teamId)));
-  const myProjects = projects.filter(p => p.managerId === currentUser?.id || p.tags?.includes(currentUser?.department) || userTeamIds.includes(p.teamId));
+  // Current user's scoped tasks and projects via centralized ScopeRules
+  const myProjects = ScopeRules.filterProjects(projects, currentUser, teams);
+  const myTasks = ScopeRules.filterTasks(tasks, currentUser, teams, myProjects);
 
   const pendingTasks = myTasks.filter(t => t.status !== 'Completed');
   const completedTasks = myTasks.filter(t => t.status === 'Completed');

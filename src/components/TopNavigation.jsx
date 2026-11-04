@@ -36,7 +36,7 @@ export default function TopNavigation() {
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
 
-  const unreadCount = notifications.filter(n => !n.read).length;
+  const unreadCount = notifications.filter(n => (!n.userId || n.userId === currentUser?.id) && !n.read && n.type !== 'mention' && n.type !== 'message').length;
 
   const handleLogout = () => {
     setProfileDropdownOpen(false);

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { UserCircle2, Plus, Search, Edit2, Trash2, Mail, Briefcase, Building, X, Loader2 } from 'lucide-react';
+import { UserCircle2, Plus, Search, Edit2, Trash2, Mail, Briefcase, Building, X, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { UsersAPI } from '../services/api';
 import { getInitials } from '../utils/avatar';
 import { DEPARTMENTS, DEFAULT_DEPARTMENT } from '../constants/departments';
 
@@ -16,6 +17,14 @@ export default function EmployeesPage() {
   const [activeProfile, setActiveProfile] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+
+  // Delete Confirmation & Reassignment Modal state
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteSummary, setDeleteSummary] = useState(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [projectReassignments, setProjectReassignments] = useState({});
+  const [teamReassignments, setTeamReassignments] = useState({});
+  const [deleteError, setDeleteError] = useState('');
 
   // Form state
   const [formData, setFormData] = useState({
@@ -50,6 +59,37 @@ export default function EmployeesPage() {
     setModalOpen(true);
   };
 
+  const openDeleteModal = async (u) => {
+    setDeleteTarget(u);
+    setDeleteError('');
+    setDeleteLoading(true);
+    setProjectReassignments({});
+    setTeamReassignments({});
+    try {
+      const summary = await UsersAPI.getDeleteSummary(u.id);
+      setDeleteSummary(summary);
+    } catch (err) {
+      setDeleteError('Failed to load user dependencies: ' + err.message);
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteLoading(true);
+    setDeleteError('');
+    try {
+      await removeUser(deleteTarget.id, projectReassignments, teamReassignments);
+      setDeleteTarget(null);
+      setDeleteSummary(null);
+    } catch (err) {
+      setDeleteError(err.message || 'Failed to complete employee retirement');
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -68,6 +108,7 @@ export default function EmployeesPage() {
   };
 
   const filteredUsers = users.filter(u => {
+    if (u.status === 'Inactive' || u.name === 'Deleted Employee') return false;
     const matchesSearch = u.name.toLowerCase().includes(search.toLowerCase()) ||
       u.email.toLowerCase().includes(search.toLowerCase()) ||
       u.designation.toLowerCase().includes(search.toLowerCase());
@@ -195,10 +236,9 @@ export default function EmployeesPage() {
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={() => {
-                        if (window.confirm(`Remove employee ${u.name}?`)) removeUser(u.id);
-                      }}
+                      onClick={() => openDeleteModal(u)}
                       className="p-1 rounded text-[var(--text-sec)] hover:text-[#E05252] cursor-pointer"
+                      title="Retire & Delete Employee"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -382,6 +422,144 @@ export default function EmployeesPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Safe Deletion & Reassignment Workflow Modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl w-full max-w-xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-[var(--border)] mb-4">
+              <div className="flex items-center gap-2 text-[#E05252]">
+                <ShieldAlert className="w-5 h-5" />
+                <h3 className="font-bold text-sm text-[var(--text-main)]">Safe Account Retirement: {deleteTarget.name}</h3>
+              </div>
+              <button
+                onClick={() => { setDeleteTarget(null); setDeleteSummary(null); }}
+                className="p-1 rounded text-[var(--text-sec)] hover:bg-[var(--bg-main)] cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {deleteLoading && !deleteSummary ? (
+              <div className="py-12 flex flex-col items-center justify-center text-[var(--text-sec)] gap-2">
+                <Loader2 className="w-6 h-6 animate-spin text-[#635BFF]" />
+                <span className="text-xs">Analyzing employee assignments and dependencies...</span>
+              </div>
+            ) : (
+              <div className="space-y-4 text-xs">
+                {deleteError && (
+                  <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-500 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{deleteError}</span>
+                  </div>
+                )}
+
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400">
+                  <p className="font-semibold mb-1">Integrity Assurance</p>
+                  <p className="opacity-90 leading-relaxed">
+                    Account access will be permanently revoked and credentials invalidated. Historical messages, documents, comments, and reports will remain preserved under <strong>"Deleted Employee"</strong>.
+                  </p>
+                </div>
+
+                {/* Managed Projects Reassignment Requirement */}
+                {deleteSummary?.managedProjects?.length > 0 && (
+                  <div className="space-y-2 p-3 rounded-xl border border-[var(--border)] bg-[var(--bg-main)]">
+                    <label className="font-bold text-[var(--text-main)] block">
+                      ⚠️ Projects Requiring Ownership Reassignment ({deleteSummary.managedProjects.length})
+                    </label>
+                    <p className="text-[11px] text-[var(--text-sec)]">
+                      Assign a new Project Manager before completing retirement:
+                    </p>
+                    {deleteSummary.managedProjects.map(p => (
+                      <div key={p.id} className="flex items-center justify-between gap-2 py-1">
+                        <span className="font-medium text-[var(--text-main)] truncate max-w-[200px]">{p.name}</span>
+                        <select
+                          required
+                          value={projectReassignments[p.id] || ''}
+                          onChange={e => setProjectReassignments({ ...projectReassignments, [p.id]: e.target.value })}
+                          className="px-2 py-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-main)] outline-none"
+                        >
+                          <option value="">Select New Manager...</option>
+                          {users
+                            .filter(u => u.id !== deleteTarget.id && u.status !== 'Inactive' && u.name !== 'Deleted Employee')
+                            .map(u => (
+                              <option key={u.id} value={u.id}>{u.name} ({u.role.replace('_', ' ')})</option>
+                            ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Led Teams Reassignment Requirement */}
+                {deleteSummary?.ledTeams?.length > 0 && (
+                  <div className="space-y-2 p-3 rounded-xl border border-[var(--border)] bg-[var(--bg-main)]">
+                    <label className="font-bold text-[var(--text-main)] block">
+                      ⚠️ Teams Requiring Leader Reassignment ({deleteSummary.ledTeams.length})
+                    </label>
+                    <p className="text-[11px] text-[var(--text-sec)]">
+                      Assign an eligible replacement Team Leader:
+                    </p>
+                    {deleteSummary.ledTeams.map(t => (
+                      <div key={t.id} className="flex items-center justify-between gap-2 py-1">
+                        <span className="font-medium text-[var(--text-main)] truncate max-w-[200px]">{t.name}</span>
+                        <select
+                          required
+                          value={teamReassignments[t.id] || ''}
+                          onChange={e => setTeamReassignments({ ...teamReassignments, [t.id]: e.target.value })}
+                          className="px-2 py-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-main)] outline-none"
+                        >
+                          <option value="">Select New Team Leader...</option>
+                          {users
+                            .filter(u => u.id !== deleteTarget.id && u.status !== 'Inactive' && u.name !== 'Deleted Employee')
+                            .map(u => (
+                              <option key={u.id} value={u.id}>{u.name} ({u.designation})</option>
+                            ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Impact Summary */}
+                <div className="grid grid-cols-2 gap-3 text-center">
+                  <div className="p-3 bg-[var(--bg-main)] rounded-xl border border-[var(--border)]">
+                    <div className="font-bold text-base text-[var(--text-main)]">{deleteSummary?.assignedTasks?.length || 0}</div>
+                    <div className="text-[11px] text-[var(--text-sec)]">Tasks become Unassigned</div>
+                  </div>
+                  <div className="p-3 bg-[var(--bg-main)] rounded-xl border border-[var(--border)]">
+                    <div className="font-bold text-base text-[var(--text-main)]">{deleteSummary?.memberTeams?.length || 0}</div>
+                    <div className="text-[11px] text-[var(--text-sec)]">Active Team memberships removed</div>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-[var(--border)] flex justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={deleteLoading}
+                    onClick={() => { setDeleteTarget(null); setDeleteSummary(null); }}
+                    className="px-4 py-2 text-xs text-[var(--text-sec)] hover:bg-[var(--bg-main)] rounded-xl cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      deleteLoading ||
+                      (deleteSummary?.managedProjects?.some(p => !projectReassignments[p.id])) ||
+                      (deleteSummary?.ledTeams?.some(t => !teamReassignments[t.id]))
+                    }
+                    onClick={handleConfirmDelete}
+                    className="px-5 py-2 text-xs bg-[#E05252] hover:bg-[#c93b3b] text-white font-semibold rounded-xl shadow-xs cursor-pointer disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {deleteLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                    <span>Confirm Account Retirement</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

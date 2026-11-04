@@ -18,12 +18,14 @@ export default function LoginPage() {
   const { login, users } = useApp();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState('login'); // 'login', 'forgot', 'reset'
-  const [email, setEmail] = useState('admin@nexxoory.com');
-  const [password, setPassword] = useState('admin123');
+  const [activeTab, setActiveTab] = useState('login'); // 'login', 'forgot', 'verify', 'reset'
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
   const [resetToken, setResetToken] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -56,12 +58,6 @@ export default function LoginPage() {
     targetPos.current.y = e.clientY;
   };
 
-  const handlePersonaSelect = (user) => {
-    setEmail(user.email);
-    setPassword('admin123');
-    setErrorMsg('');
-  };
-
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
     setIsLoading(true);
@@ -85,13 +81,12 @@ export default function LoginPage() {
 
     try {
       const res = await AuthAPI.forgotPassword(email);
-      setSuccessMsg(res.message || 'If an account exists, a recovery token has been processed.');
-      if (res.data?.devToken) {
-        setResetToken(res.data.devToken);
-      }
+      setSuccessMsg('A 6-digit OTP code has been sent to your registered email address.');
+      setOtpCode('');
       setTimeout(() => {
-        setActiveTab('reset');
-      }, 1500);
+        setActiveTab('verify');
+        setSuccessMsg('');
+      }, 1000);
     } catch (err) {
       setErrorMsg(err.message || 'Unable to request password recovery.');
     } finally {
@@ -99,12 +94,47 @@ export default function LoginPage() {
     }
   };
 
-  const handleResetSubmit = async (e) => {
+  const handleVerifyOtpSubmit = async (e) => {
     e.preventDefault();
     setIsLoading(true);
     setErrorMsg('');
     setSuccessMsg('');
 
+    try {
+      const res = await AuthAPI.verifyOtp(email, otpCode);
+      if (res.data?.resetToken) {
+        setResetToken(res.data.resetToken);
+        setSuccessMsg('OTP verified successfully!');
+        setTimeout(() => {
+          setActiveTab('reset');
+          setSuccessMsg('');
+        }, 800);
+      } else {
+        throw new Error('Failed to obtain reset authorization token.');
+      }
+    } catch (err) {
+      setErrorMsg(err.message || 'Invalid or expired OTP code.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResetSubmit = async (e) => {
+    e.preventDefault();
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    if (newPassword !== confirmPassword) {
+      setErrorMsg('New password and confirm password do not match.');
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      setErrorMsg('Password must be at least 8 characters long.');
+      return;
+    }
+
+    setIsLoading(true);
     try {
       await AuthAPI.resetPassword(resetToken, newPassword);
       setSuccessMsg('Password successfully updated! Redirecting to login...');
@@ -112,9 +142,9 @@ export default function LoginPage() {
         setActiveTab('login');
         setPassword(newPassword);
         setSuccessMsg('');
-      }, 1500);
+      }, 1200);
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to reset password. Token may be expired or invalid.');
+      setErrorMsg(err.message || 'Failed to reset password. Authorization token may be expired or invalid.');
     } finally {
       setIsLoading(false);
     }
@@ -203,12 +233,14 @@ export default function LoginPage() {
             <h2 className="text-xl sm:text-2xl font-bold text-[var(--text-main)] tracking-tight">
               {activeTab === 'login' && 'Sign in to Nexxoory'}
               {activeTab === 'forgot' && 'Reset Your Password'}
+              {activeTab === 'verify' && 'Verify 6-Digit OTP'}
               {activeTab === 'reset' && 'Create New Password'}
             </h2>
             <p className="text-xs text-[var(--text-sec)] mt-1">
               {activeTab === 'login' && 'Enter your organizational credentials'}
-              {activeTab === 'forgot' && 'Enter registered email to generate recovery token'}
-              {activeTab === 'reset' && 'Provide valid reset token and new credentials'}
+              {activeTab === 'forgot' && 'Enter registered email to receive a 6-digit OTP code'}
+              {activeTab === 'verify' && 'Enter the 6-digit verification code sent to your email'}
+              {activeTab === 'reset' && 'Create and confirm your new secure password'}
             </p>
           </div>
 
@@ -320,7 +352,7 @@ export default function LoginPage() {
                 disabled={isLoading}
                 className="w-full py-2.5 rounded-xl bg-[#1E6091] hover:bg-[#143A52] text-white text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
-                {isLoading ? 'Processing...' : 'Generate Recovery Token'}
+                {isLoading ? 'Sending OTP Code...' : 'Send 6-Digit OTP'}
               </button>
 
               <div className="text-center">
@@ -339,24 +371,63 @@ export default function LoginPage() {
             </form>
           )}
 
-          {/* RESET PASSWORD FORM */}
-          {activeTab === 'reset' && (
-            <form onSubmit={handleResetSubmit} className="space-y-4">
+          {/* VERIFY OTP FORM */}
+          {activeTab === 'verify' && (
+            <form onSubmit={handleVerifyOtpSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Recovery Token</label>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-xs font-semibold text-[var(--text-main)]">6-Digit Verification Code</label>
+                  <span className="text-[11px] text-[var(--text-sec)]">Sent to {email}</span>
+                </div>
                 <div className="relative">
                   <KeyRound className="w-4 h-4 text-[var(--text-sec)] absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     required
-                    value={resetToken}
-                    onChange={(e) => setResetToken(e.target.value)}
-                    placeholder="Paste 64-char hex token"
-                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] font-mono outline-none"
+                    maxLength={6}
+                    pattern="[0-9]{6}"
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                    placeholder="123456"
+                    className="w-full pl-9 pr-3 py-2.5 text-base tracking-[0.3em] font-mono font-bold text-center rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
                   />
                 </div>
               </div>
 
+              <button
+                type="submit"
+                disabled={isLoading || otpCode.length !== 6}
+                className="w-full py-2.5 rounded-xl bg-[#1E6091] hover:bg-[#143A52] text-white text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                {isLoading ? 'Verifying Code...' : 'Verify OTP Code'}
+              </button>
+
+              <div className="flex justify-between items-center text-xs">
+                <button
+                  type="button"
+                  onClick={handleForgotSubmit}
+                  className="text-[#1E6091] dark:text-[#38BDF8] hover:underline cursor-pointer"
+                >
+                  Resend code
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('login');
+                    setErrorMsg('');
+                    setSuccessMsg('');
+                  }}
+                  className="text-[var(--text-sec)] hover:underline cursor-pointer"
+                >
+                  ← Back to login
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* RESET PASSWORD FORM */}
+          {activeTab === 'reset' && (
+            <form onSubmit={handleResetSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">New Password</label>
                 <div className="relative">
@@ -368,6 +439,22 @@ export default function LoginPage() {
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     placeholder="Min 8 characters"
+                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Confirm New Password</label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-[var(--text-sec)] absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="password"
+                    required
+                    minLength={8}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Re-enter new password"
                     className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
                   />
                 </div>

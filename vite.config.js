@@ -29,6 +29,7 @@ export default defineConfig({
                 'refresh': 'api/v1/auth/refresh.js',
                 'me': 'api/v1/auth/me.js',
                 'forgot-password': 'api/v1/auth/forgot-password.js',
+                'verify-otp': 'api/v1/auth/verify-otp.js',
                 'reset-password': 'api/v1/auth/reset-password.js',
                 'change-password': 'api/v1/auth/change-password.js',
               };

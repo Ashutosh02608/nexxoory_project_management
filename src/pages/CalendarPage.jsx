@@ -9,15 +9,10 @@ import {
   MapPin,
   Loader2,
   Trash2,
-  Edit2,
-  Users,
-  Briefcase,
-  Layers,
-  CheckCircle2,
-  Filter
+  Edit2
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { getInitials } from '../utils/avatar';
+import { DEPARTMENTS } from '../constants/departments';
 
 const EVENT_TYPES = [
   { value: 'meeting', label: 'Meeting', color: '#635BFF', bg: 'bg-[#635BFF]/10 text-[#635BFF] border-[#635BFF]/20' },
@@ -31,8 +26,8 @@ const EVENT_TYPES = [
 export default function CalendarPage() {
   const { events, updateEvent, removeEvent, projects, teams, users, currentUser } = useApp();
 
-  // Navigation State
-  const [currentDate, setCurrentDate] = useState(() => new Date(2026, 10, 1)); // Nov 2026 default
+  // Navigation State: default to today
+  const [currentDate, setCurrentDate] = useState(() => new Date());
   const [viewMode, setViewMode] = useState('month'); // 'month', 'week', 'day'
   const [typeFilter, setTypeFilter] = useState('ALL');
 
@@ -60,20 +55,45 @@ export default function CalendarPage() {
   });
 
   // Filter events according to user RBAC visibility
-  const userTeamIds = teams.filter(tm => tm.memberIds?.includes(currentUser?.id) || tm.leaderId === currentUser?.id).map(tm => tm.id);
-  const userProjectIds = projects.filter(p => p.managerId === currentUser?.id || userTeamIds.includes(p.teamId)).map(p => p.id);
+  const userTeamIds = teams
+    .filter(tm => tm.memberIds?.includes(currentUser?.id) || tm.leaderId === currentUser?.id)
+    .map(tm => tm.id);
+  const userProjectIds = projects
+    .filter(p => p.managerId === currentUser?.id || (p.teamId && userTeamIds.includes(p.teamId)))
+    .map(p => p.id);
+
+  const canCreateEvent = currentUser?.role === 'admin' || currentUser?.role === 'project_manager';
+
+  const canEditEvent = (evt) => {
+    if (!currentUser || !evt) return false;
+    if (currentUser.role === 'admin') return true;
+    if (currentUser.role === 'project_manager') {
+      return (
+        evt.creatorId === currentUser.id ||
+        (evt.teamId && teams.some(t => t.id === evt.teamId && t.leaderId === currentUser.id)) ||
+        (evt.projectId && projects.some(p => p.id === evt.projectId && p.managerId === currentUser.id))
+      );
+    }
+    // Team member: strictly read-only
+    return false;
+  };
 
   const visibleEvents = events.filter(e => {
     // Audience filter
     if (currentUser?.role !== 'admin') {
-      if (e.type === 'company_event') {
-        // visible to all authorized users
-      } else if (e.type === 'team_event') {
-        if (e.teamId && !userTeamIds.includes(e.teamId)) return false;
-      } else if (e.projectId) {
-        if (!userProjectIds.includes(e.projectId) && e.creatorId !== currentUser?.id && !e.attendees?.includes(currentUser?.id)) return false;
-      } else {
-        if (e.creatorId !== currentUser?.id && !e.attendees?.includes(currentUser?.id) && e.type !== 'milestone' && e.type !== 'deadline') return false;
+      const isCompanyWide = e.type === 'company_event' || (!e.projectId && !e.teamId && !e.department && (!e.attendees || e.attendees.length === 0));
+      if (isCompanyWide) {
+        // visible to all active employees
+        return true;
+      }
+      const isCreator = e.creatorId === currentUser?.id;
+      const isAttendee = Array.isArray(e.attendees) && e.attendees.includes(currentUser?.id);
+      const isTeamEvent = e.teamId && userTeamIds.includes(e.teamId);
+      const isProjectEvent = e.projectId && userProjectIds.includes(e.projectId);
+      const isDepartmentEvent = e.department && currentUser?.department && e.department.toLowerCase() === currentUser.department.toLowerCase();
+
+      if (!isCreator && !isAttendee && !isTeamEvent && !isProjectEvent && !isDepartmentEvent) {
+        return false;
       }
     }
 
@@ -100,7 +120,7 @@ export default function CalendarPage() {
   };
 
   const handleToday = () => {
-    setCurrentDate(new Date(2026, 10, 5)); // Target anchor in seed data
+    setCurrentDate(new Date());
   };
 
   // Form open helpers
@@ -117,8 +137,9 @@ export default function CalendarPage() {
       endDate: dStr,
       endTime: '11:00',
       isAllDay: false,
-      projectId: projects[0]?.id || '',
-      teamId: teams[0]?.id || '',
+      projectId: '',
+      teamId: '',
+      department: '',
       location: 'Meeting Room Alpha',
       attendees: []
     });
@@ -143,6 +164,7 @@ export default function CalendarPage() {
       isAllDay: !!evt.isAllDay,
       projectId: evt.projectId || '',
       teamId: evt.teamId || '',
+      department: evt.department || '',
       location: evt.location || 'Virtual',
       attendees: evt.attendees || []
     });
@@ -178,6 +200,7 @@ export default function CalendarPage() {
         isAllDay: formData.isAllDay,
         projectId: formData.projectId || null,
         teamId: formData.teamId || null,
+        department: formData.department || null,
         location: formData.location || 'Virtual',
         attendees: formData.attendees || []
       });
@@ -233,13 +256,15 @@ export default function CalendarPage() {
           </p>
         </div>
 
-        <button
-          onClick={openCreateModal}
-          className="flex items-center gap-2 bg-[#635BFF] hover:bg-[#4942D9] text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-xs transition-colors cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Schedule Event</span>
-        </button>
+        {canCreateEvent && (
+          <button
+            onClick={openCreateModal}
+            className="flex items-center gap-2 bg-[#635BFF] hover:bg-[#4942D9] text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-xs transition-colors cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Schedule Event</span>
+          </button>
+        )}
       </div>
 
       {/* Calendar Controls & Navigation Bar */}
@@ -490,18 +515,22 @@ export default function CalendarPage() {
                     >
                       View
                     </button>
-                    <button
-                      onClick={() => openEditModal(e)}
-                      className="text-xs text-[var(--text-sec)] hover:text-[#635BFF] cursor-pointer p-1"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(e.id)}
-                      className="text-xs text-[var(--text-sec)] hover:text-red-500 cursor-pointer p-1"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {canEditEvent(e) && (
+                      <button
+                        onClick={() => openEditModal(e)}
+                        className="text-xs text-[var(--text-sec)] hover:text-[#635BFF] cursor-pointer p-1"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    {canEditEvent(e) && (
+                      <button
+                        onClick={() => handleDelete(e.id)}
+                        className="text-xs text-[var(--text-sec)] hover:text-red-500 cursor-pointer p-1"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -574,19 +603,23 @@ export default function CalendarPage() {
               )}
 
               <div className="pt-3 border-t border-[var(--border)] flex justify-between items-center">
-                <button
-                  onClick={() => handleDelete(detailEvent.id)}
-                  className="px-3 py-1.5 text-xs text-red-500 font-semibold hover:bg-red-500/10 rounded-lg cursor-pointer"
-                >
-                  Delete Event
-                </button>
-                <div className="flex gap-2">
+                {canEditEvent(detailEvent) ? (
                   <button
-                    onClick={() => openEditModal(detailEvent)}
-                    className="px-4 py-2 text-xs bg-[#635BFF] text-white font-semibold rounded-lg hover:bg-[#4942D9] cursor-pointer"
+                    onClick={() => handleDelete(detailEvent.id)}
+                    className="px-3 py-1.5 text-xs text-red-500 font-semibold hover:bg-red-500/10 rounded-lg cursor-pointer"
                   >
-                    Edit Event
+                    Delete Event
                   </button>
+                ) : <div />}
+                <div className="flex gap-2">
+                  {canEditEvent(detailEvent) && (
+                    <button
+                      onClick={() => openEditModal(detailEvent)}
+                      className="px-4 py-2 text-xs bg-[#635BFF] text-white font-semibold rounded-lg hover:bg-[#4942D9] cursor-pointer"
+                    >
+                      Edit Event
+                    </button>
+                  )}
                   <button
                     onClick={() => setDetailEvent(null)}
                     className="px-4 py-2 text-xs border border-[var(--border)] text-[var(--text-main)] rounded-lg hover:bg-[var(--bg-main)] cursor-pointer"
@@ -723,17 +756,17 @@ export default function CalendarPage() {
                 )}
               </div>
 
-              {/* Project & Team Associations */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Project, Team & Department Associations */}
+              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Project (Optional)</label>
                   <select
                     value={formData.projectId}
                     onChange={(e) => setFormData({ ...formData, projectId: e.target.value })}
-                    className="w-full px-2.5 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
+                    className="w-full px-2 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
                   >
-                    <option value="">None / Company Wide</option>
-                    {projects.map(p => (
+                    <option value="">None</option>
+                    {(currentUser?.role === 'admin' ? projects : projects.filter(p => userProjectIds.includes(p.id))).map(p => (
                       <option key={p.id} value={p.id}>{p.name}</option>
                     ))}
                   </select>
@@ -743,13 +776,78 @@ export default function CalendarPage() {
                   <select
                     value={formData.teamId}
                     onChange={(e) => setFormData({ ...formData, teamId: e.target.value })}
-                    className="w-full px-2.5 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
+                    className="w-full px-2 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
                   >
-                    <option value="">None / All Teams</option>
-                    {teams.map(tm => (
+                    <option value="">None</option>
+                    {(currentUser?.role === 'admin' ? teams : teams.filter(t => userTeamIds.includes(t.id))).map(tm => (
                       <option key={tm.id} value={tm.id}>{tm.name}</option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Department</label>
+                  <select
+                    value={formData.department}
+                    onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                    className="w-full px-2 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
+                  >
+                    <option value="">All / None</option>
+                    {DEPARTMENTS.map(d => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Specific Attendees Selection */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-semibold text-[var(--text-main)]">Specific Attendees (Optional)</label>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const activeUserIds = users.filter(u => u.status !== 'Inactive').map(u => u.id);
+                        setFormData({ ...formData, attendees: activeUserIds });
+                      }}
+                      className="text-[#635BFF] hover:underline font-semibold cursor-pointer"
+                    >
+                      Select All
+                    </button>
+                    <span className="text-[var(--text-sec)]">·</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData({ ...formData, attendees: [] });
+                      }}
+                      className="text-[var(--text-sec)] hover:underline cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <div className="max-h-28 overflow-y-auto border border-[var(--border)] rounded-lg p-2 bg-[var(--bg-main)] space-y-1">
+                  {users.filter(u => u.status !== 'Inactive').map(u => {
+                    const isChecked = Array.isArray(formData.attendees) && formData.attendees.includes(u.id);
+                    return (
+                      <label key={u.id} className="flex items-center gap-2 text-xs text-[var(--text-main)] hover:bg-[var(--surface)] p-1 rounded cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setFormData({ ...formData, attendees: [...(formData.attendees || []), u.id] });
+                            } else {
+                              setFormData({ ...formData, attendees: (formData.attendees || []).filter(id => id !== u.id) });
+                            }
+                          }}
+                          className="rounded text-[#635BFF] cursor-pointer"
+                        />
+                        <span className="font-medium">{u.name}</span>
+                        <span className="text-[10px] text-[var(--text-sec)]">({u.role?.replace('_', ' ')} · {u.department})</span>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
 

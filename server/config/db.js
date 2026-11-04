@@ -78,6 +78,9 @@ export function getDbPool() {
       keepAliveInitialDelayMillis: 10000,
     });
 
+    // Warm initial pool connection in background to eliminate first-query cold lag
+    pool.query('SELECT 1;').catch(() => {});
+
     pool.on('error', (err) => {
       // Log sanitized error without connection strings, host details, or credentials
       console.error('[DATABASE POOL ERROR]', err.name, err.message);
@@ -100,7 +103,8 @@ export async function query(text, params = []) {
   try {
     const res = await p.query(text, params);
     const duration = Date.now() - start;
-    if (process.env.NODE_ENV === 'development' && duration > 2000) {
+    // In dev mode, only log slow queries if query runtime exceeds 5000ms (ignoring serverless cold spin-up latency)
+    if (process.env.NODE_ENV === 'development' && duration > 5000) {
       const preview = text.replace(/\s+/g, ' ').trim().slice(0, 100);
       console.warn(`[SLOW QUERY DETECTED] Duration: ${duration}ms | Query: "${preview}..."`);
     }

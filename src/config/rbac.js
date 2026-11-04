@@ -11,7 +11,6 @@ import {
   Users2,
   UserCircle2,
   CalendarDays,
-  GanttChartSquare,
   FolderArchive,
   MessageSquare,
   BarChart3,
@@ -139,15 +138,64 @@ export function canPerformAction(role, action) {
  * Data Scoping Rules
  */
 export const ScopeRules = {
-  // Projects visible to user
-  filterProjects: (projects = [], user) => {
+  // Projects visible to user:
+  // - Admin: all projects
+  // - Project Manager / Team Leader: projects they manage OR projects associated with teams they lead
+  // - Team Member: projects they manage OR projects assigned to teams they belong to
+  filterProjects: (projects = [], user, teams = []) => {
     if (!user) return [];
     if (user.role === ROLES.ADMIN) return projects;
+
     if (user.role === ROLES.PROJECT_MANAGER) {
-      return projects.filter(p => p.managerId === user.id || p.assignedManagerId === user.id);
+      const ledTeamIds = teams.filter(t => t.leaderId === user.id).map(t => t.id);
+      return projects.filter(p =>
+        p.managerId === user.id ||
+        (p.teamId && ledTeamIds.includes(p.teamId))
+      );
     }
-    // Team member: projects where member's teams or personal assignment apply
-    return projects.filter(p => p.memberIds?.includes(user.id) || p.tags?.includes(user.department));
+
+    // Team Member: only projects assigned to user or their teams
+    const userTeamIds = teams
+      .filter(t => t.memberIds?.includes(user.id) || t.leaderId === user.id)
+      .map(t => t.id);
+
+    return projects.filter(p =>
+      p.managerId === user.id ||
+      (p.teamId && userTeamIds.includes(p.teamId)) ||
+      (p.memberIds && p.memberIds.includes(user.id))
+    );
+  },
+
+  // Tasks visible to user:
+  // - Admin: all tasks
+  // - Project Manager / Team Leader: assigned directly, in led teams, or in managed projects
+  // - Team Member: assigned directly or in their teams
+  filterTasks: (tasks = [], user, teams = [], projects = []) => {
+    if (!user) return [];
+    if (user.role === ROLES.ADMIN) return tasks;
+
+    if (user.role === ROLES.PROJECT_MANAGER) {
+      const ledTeamIds = teams.filter(t => t.leaderId === user.id).map(t => t.id);
+      const managedProjectIds = projects
+        .filter(p => p.managerId === user.id || (p.teamId && ledTeamIds.includes(p.teamId)))
+        .map(p => p.id);
+
+      return tasks.filter(t =>
+        t.assigneeId === user.id ||
+        (t.teamId && ledTeamIds.includes(t.teamId)) ||
+        (t.projectId && managedProjectIds.includes(t.projectId))
+      );
+    }
+
+    // Team Member
+    const userTeamIds = teams
+      .filter(t => t.memberIds?.includes(user.id) || t.leaderId === user.id)
+      .map(t => t.id);
+
+    return tasks.filter(t =>
+      t.assigneeId === user.id ||
+      (t.teamId && userTeamIds.includes(t.teamId))
+    );
   },
 
   // Project Edit check

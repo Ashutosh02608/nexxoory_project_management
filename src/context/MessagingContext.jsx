@@ -1,406 +1,428 @@
-/**
- * MessagingContext — Frontend-only localStorage messaging layer
- * Manages: conversations, messages, reactions, replies, read states, settings
- */
+/** Neon-backed messaging state and actions. */
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { useApp } from './AppContext';
+import { ConversationsAPI } from '../services/api';
+import { autoSyncBus, SYNC_EVENTS } from '../services/autoSync';
+import { playMessageChime } from '../utils/soundEffects';
 
 const MessagingContext = createContext(null);
 
-const LS_KEY = 'nx_messaging_v1';
+const CACHE_KEY_PREFIX = 'nx_msg_cache_';
 
-// ─── Stable ID helpers ─────────────────────────────────────────────────────
-export const convId = {
-  dm: (a, b) => `dm_${[a, b].sort().join('_')}`,
-  project: (projectId) => `proj_${projectId}`,
-  dept: (dept) => `dept_${dept.toLowerCase().replace(/\s+/g, '_')}`,
-  announcements: () => 'channel_announcements',
-};
-
-// ─── Blank state factory ───────────────────────────────────────────────────
-function blankState() {
-  return {
-    conversations: {},  // id → ConversationRecord
-    messages: {},       // conversationId → Message[]
-    readStates: {},     // conversationId → { userId → lastReadTs }
-    settings: {},       // conversationId → { userId → { muted, pinned } }
-  };
-}
-
-function loadFromLS() {
+function getCache(userId) {
+  if (!userId) return null;
   try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return blankState();
-    return JSON.parse(raw);
+    const raw = localStorage.getItem(`${CACHE_KEY_PREFIX}${userId}`);
+    return raw ? JSON.parse(raw) : null;
   } catch {
-    return blankState();
+    return null;
   }
 }
 
-function saveToLS(state) {
+function saveCache(userId, data) {
+  if (!userId) return;
   try {
-    localStorage.setItem(LS_KEY, JSON.stringify(state));
+    localStorage.setItem(`${CACHE_KEY_PREFIX}${userId}`, JSON.stringify(data));
   } catch (e) {
-    console.warn('[Messaging] localStorage save failed', e);
+    console.warn('[MESSAGING] Failed to cache messages locally:', e);
   }
 }
 
-// ─── Derive project participants ──────────────────────────────────────────
-function getProjectParticipants(project, teams, users) {
-  const ids = new Set();
-  if (project.managerId) ids.add(project.managerId);
-  if (project.assignedManagerId) ids.add(project.assignedManagerId);
-  (project.memberIds || []).forEach(id => ids.add(id));
-  // team members
-  (project.teamId ? [project.teamId] : []).forEach(tid => {
-    const team = teams.find(t => t.id === tid);
-    if (team) {
-      (team.memberIds || []).forEach(mid => ids.add(mid));
-      if (team.leaderId) ids.add(team.leaderId);
-    }
-  });
-  return [...ids].filter(Boolean);
-}
-
-// ─── Provider ─────────────────────────────────────────────────────────────
 export function MessagingProvider({ children }) {
-  const { currentUser, users, projects, teams, addLocalNotification } = useApp();
-  const [state, setState] = useState(() => loadFromLS());
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  const { currentUser } = useApp();
+  
+  // Instant local cache hydration for sub-second first-paint
+  const initialCache = getCache(currentUser?.id);
 
-  // Persist on every change
-  useEffect(() => {
-    saveToLS(state);
-  }, [state]);
+  const [conversations, setConversations] = useState(() => initialCache?.conversations || {});
+  const [messages, setMessages] = useState(() => initialCache?.messages || {});
+  const [settings, setSettings] = useState(() => initialCache?.settings || {});
+  const [loading, setLoading] = useState(() => !initialCache?.conversations || Object.keys(initialCache.conversations).length === 0);
+  const mounted = useRef(false);
+  const fetching = useRef(false);
+  const syncing = useRef(false);
+  const syncCursor = useRef(initialCache?.syncCursor || null);
 
-  // ── Auto-generate / sync conversations whenever projects/users/teams change
-  useEffect(() => {
-    if (!users?.length) return;
-    setState(prev => {
-      const next = { ...prev, conversations: { ...prev.conversations } };
+  // Stable Set of known message IDs to strictly prevent repeated chimes or startup triggers
+  const knownMessageIdsRef = useRef(new Set());
+  const messagesBaselineEstablishedRef = useRef(false);
 
-      // 1. Announcements channel (singleton)
-      const annId = convId.announcements();
-      if (!next.conversations[annId]) {
-        next.conversations[annId] = {
-          id: annId,
-          type: 'announcements',
-          name: 'Company Announcements',
-          participantIds: users.filter(u => u.status !== 'inactive').map(u => u.id),
-          isReadOnly: true,   // non-admins can't post
-          createdAt: new Date().toISOString(),
-          icon: '📢',
+  const fetchConversations = useCallback(async (silent = false) => {
+    if (!currentUser) return null;
+    if (fetching.current) return null;
+    fetching.current = true;
+    if (!silent && mounted.current && Object.keys(conversations).length === 0) setLoading(true);
+    try {
+      const data = await ConversationsAPI.getAll();
+      if (!data || !mounted.current) return data;
+      const nextConversations = {};
+      const nextSettings = {};
+      (data.conversations || []).forEach((conversation) => {
+        const normalized = {
+          ...conversation,
+          type: conversation.type === 'direct' ? 'dm' : conversation.type,
+          participantIds: conversation.participantIds || [],
         };
-      } else {
-        // Sync participant list (active users only)
-        next.conversations[annId] = {
-          ...next.conversations[annId],
-          participantIds: users.filter(u => u.status !== 'inactive').map(u => u.id),
+        nextConversations[normalized.id] = normalized;
+        nextSettings[normalized.id] = {
+          pinned: Boolean(normalized.pinned),
+          muted: Boolean(normalized.muted),
+          lastReadAt: normalized.lastReadAt || null,
         };
+      });
+      setConversations(nextConversations);
+      setMessages(data.messages || {});
+      setSettings(nextSettings);
+      syncCursor.current = data.syncCursor || new Date().toISOString();
+
+      // Seed known message IDs baseline during initial startup load
+      if (!messagesBaselineEstablishedRef.current) {
+        if (data.messages && typeof data.messages === 'object') {
+          Object.values(data.messages).forEach(list => {
+            if (Array.isArray(list)) {
+              list.forEach(m => {
+                if (m?.id) knownMessageIdsRef.current.add(m.id);
+              });
+            }
+          });
+        }
+        messagesBaselineEstablishedRef.current = true;
       }
 
-      // 2. Department groups — derived from users.department
-      const depts = [...new Set(users.filter(u => u.department).map(u => u.department))];
-      depts.forEach(dept => {
-        const cid = convId.dept(dept);
-        const members = users.filter(u => u.department === dept && u.status !== 'inactive').map(u => u.id);
-        if (!next.conversations[cid]) {
-          next.conversations[cid] = {
-            id: cid,
-            type: 'department',
-            name: `${dept} — Department Group`,
-            department: dept,
-            participantIds: members,
-            isReadOnly: false,
-            createdAt: new Date().toISOString(),
-            icon: '🏢',
-          };
-        } else {
-          next.conversations[cid] = {
-            ...next.conversations[cid],
-            participantIds: members,
-          };
-        }
+      // Persist to local fast cache
+      saveCache(currentUser.id, {
+        conversations: nextConversations,
+        messages: data.messages || {},
+        settings: nextSettings,
+        syncCursor: syncCursor.current
       });
 
-      // 3. Project groups — one per project
-      (projects || []).forEach(project => {
-        const cid = convId.project(project.id);
-        const participants = getProjectParticipants(project, teams || [], users);
-        const isArchived = project.status === 'archived' || project.status === 'completed';
-        if (!next.conversations[cid]) {
-          next.conversations[cid] = {
-            id: cid,
-            type: 'project',
-            name: `${project.name} — Project Group`,
-            projectId: project.id,
-            participantIds: participants,
-            isReadOnly: isArchived,
-            createdAt: project.createdAt || new Date().toISOString(),
-            icon: '📁',
-          };
-        } else {
-          // Sync membership, preserve messages
-          next.conversations[cid] = {
-            ...next.conversations[cid],
-            name: `${project.name} — Project Group`,
-            participantIds: participants,
-            isReadOnly: isArchived,
-          };
-        }
-      });
-
-      return next;
-    });
-  }, [users, projects, teams]);
-
-  // ── Helper: add notification to AppContext notifications
-  const pushNotification = useCallback((recipientId, text, conversationId) => {
-    if (!addLocalNotification) return;
-    const notif = {
-      id: `notif_msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-      type: 'message',
-      message: text,
-      conversationId,
-      userId: recipientId,
-      read: false,
-      createdAt: new Date().toISOString(),
-    };
-    addLocalNotification(notif);
-  }, [addLocalNotification]);
-
-  // ── Send message
-  const sendMessage = useCallback((conversationId, text, replyToId = null) => {
-    if (!currentUser || !text?.trim()) return null;
-    const msg = {
-      id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-      conversationId,
-      senderId: currentUser.id,
-      senderName: currentUser.name,
-      text: text.trim(),
-      replyToId,
-      reactions: {},
-      edited: false,
-      deleted: false,
-      timestamp: new Date().toISOString(),
-    };
-    setState(prev => {
-      const msgs = [...(prev.messages[conversationId] || []), msg];
-      return { ...prev, messages: { ...prev.messages, [conversationId]: msgs } };
-    });
-
-    // Notify other participants (not sender, not muted)
-    const conv = stateRef.current.conversations[conversationId];
-    if (conv) {
-      (conv.participantIds || []).forEach(pid => {
-        if (pid === currentUser.id) return;
-        const userSettings = stateRef.current.settings[conversationId]?.[pid] || {};
-        if (userSettings.muted) return;
-        pushNotification(pid, `${currentUser.name}: ${text.slice(0, 60)}`, conversationId);
-      });
+      return data;
+    } catch (error) {
+      console.error('[MESSAGING] Unable to load conversations:', error);
+      throw error;
+    } finally {
+      fetching.current = false;
+      if (mounted.current) setLoading(false);
     }
-
-    return msg;
-  }, [currentUser, pushNotification]);
-
-  // ── Edit message
-  const editMessage = useCallback((conversationId, messageId, newText) => {
-    setState(prev => {
-      const msgs = (prev.messages[conversationId] || []).map(m =>
-        m.id === messageId && m.senderId === currentUser?.id
-          ? { ...m, text: newText, edited: true }
-          : m
-      );
-      return { ...prev, messages: { ...prev.messages, [conversationId]: msgs } };
-    });
   }, [currentUser]);
 
-  // ── Delete message
-  const deleteMessage = useCallback((conversationId, messageId) => {
-    setState(prev => {
-      const msgs = (prev.messages[conversationId] || []).map(m =>
-        m.id === messageId && m.senderId === currentUser?.id
-          ? { ...m, deleted: true, text: '' }
-          : m
-      );
-      return { ...prev, messages: { ...prev.messages, [conversationId]: msgs } };
-    });
+  useEffect(() => {
+    mounted.current = true;
+    if (currentUser) {
+      knownMessageIdsRef.current = new Set();
+      messagesBaselineEstablishedRef.current = false;
+      fetchConversations().catch(() => { });
+    } else {
+      setConversations({});
+      setMessages({});
+      setSettings({});
+      setLoading(false);
+      knownMessageIdsRef.current = new Set();
+      messagesBaselineEstablishedRef.current = false;
+    }
+    return () => { mounted.current = false; };
+  }, [currentUser, fetchConversations]);
+
+  // Incremental sync: do not download full conversation history on every poll.
+  const syncMessages = useCallback(async () => {
+    if (!currentUser || syncing.current || !syncCursor.current) return;
+    syncing.current = true;
+    try {
+      const data = await ConversationsAPI.sync(syncCursor.current);
+      if (!mounted.current || !data) return;
+
+      if (data.syncCursor) syncCursor.current = data.syncCursor;
+
+      if (Array.isArray(data.conversations) && data.conversations.length) {
+        const nextSettings = {};
+        const normalizedConversations = data.conversations.map(conversation => {
+          const normalized = {
+            ...conversation,
+            type: conversation.type === 'direct' ? 'dm' : conversation.type,
+            participantIds: conversation.participantIds || [],
+          };
+          nextSettings[normalized.id] = {
+            pinned: Boolean(normalized.pinned),
+            muted: Boolean(normalized.muted),
+            lastReadAt: normalized.lastReadAt || null,
+          };
+          return normalized;
+        });
+        setConversations(previous => {
+          const next = { ...previous };
+          normalizedConversations.forEach(conversation => {
+            next[conversation.id] = { ...next[conversation.id], ...conversation };
+          });
+          return next;
+        });
+        setSettings(previous => ({ ...previous, ...nextSettings }));
+      }
+
+      if (Array.isArray(data.messages) && data.messages.length) {
+        let hasIncomingFromOther = false;
+        setMessages(previous => {
+          const next = { ...previous };
+          data.messages.forEach(message => {
+            const list = next[message.conversationId] || [];
+            const index = list.findIndex(item => item.id === message.id);
+            if (index >= 0) {
+              const updated = [...list];
+              updated[index] = { ...updated[index], ...message };
+              next[message.conversationId] = updated;
+            } else {
+              next[message.conversationId] = [...list, message];
+              // Check if genuinely new unseen message ID from another user
+              if (message.id && !knownMessageIdsRef.current.has(message.id)) {
+                knownMessageIdsRef.current.add(message.id);
+                if (message.senderId !== currentUser?.id) {
+                  hasIncomingFromOther = true;
+                }
+              }
+            }
+          });
+          return next;
+        });
+        if (hasIncomingFromOther && messagesBaselineEstablishedRef.current && currentUser?.id) {
+          playMessageChime(currentUser.id);
+        }
+      }
+    } catch (error) {
+      // Only warn on application-level errors; suppress aborted network polls during hot-reloads or page navigation
+      if (error?.name !== 'TypeError' || !error.message?.includes('fetch resource')) {
+        console.warn('[MESSAGING] Incremental sync failed:', error);
+      }
+    } finally {
+      syncing.current = false;
+    }
   }, [currentUser]);
 
-  // ── Add / toggle reaction
-  const addReaction = useCallback((conversationId, messageId, emoji) => {
-    if (!currentUser) return;
-    setState(prev => {
-      const msgs = (prev.messages[conversationId] || []).map(m => {
-        if (m.id !== messageId) return m;
-        const reactors = m.reactions[emoji] || [];
-        const already = reactors.includes(currentUser.id);
-        return {
-          ...m,
-          reactions: {
-            ...m.reactions,
-            [emoji]: already
-              ? reactors.filter(id => id !== currentUser.id)
-              : [...reactors, currentUser.id],
-          },
-        };
-      });
-      return { ...prev, messages: { ...prev.messages, [conversationId]: msgs } };
-    });
-  }, [currentUser]);
+  useEffect(() => {
+    if (!currentUser) return undefined;
 
-  // ── Mark read
-  const markRead = useCallback((conversationId) => {
-    if (!currentUser) return;
-    setState(prev => {
-      const rs = { ...prev.readStates };
-      rs[conversationId] = { ...(rs[conversationId] || {}), [currentUser.id]: new Date().toISOString() };
-      return { ...prev, readStates: rs };
+    // Listen to autoSync bus for instant cross-tab message updates
+    const unsub = autoSyncBus.on(SYNC_EVENTS.MESSAGE_SENT, () => {
+      syncMessages();
     });
-  }, [currentUser]);
 
-  // ── Start / get DM conversation
-  const startDM = useCallback((otherUserId) => {
-    const cid = convId.dm(currentUser.id, otherUserId);
-    setState(prev => {
-      if (prev.conversations[cid]) return prev;
-      const other = users.find(u => u.id === otherUserId);
-      return {
-        ...prev,
-        conversations: {
-          ...prev.conversations,
-          [cid]: {
-            id: cid,
-            type: 'dm',
-            name: other?.name || 'Direct Message',
-            participantIds: [currentUser.id, otherUserId],
-            isReadOnly: false,
-            createdAt: new Date().toISOString(),
-            icon: null,
-          },
-        },
-      };
-    });
-    return cid;
-  }, [currentUser, users]);
+    const poll = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) syncMessages();
+    };
+    const timer = window.setInterval(poll, 1000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) syncMessages();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      unsub();
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [currentUser, syncMessages]);
 
-  // ── Pin / unpin
-  const pinConversation = useCallback((conversationId, pinned) => {
-    if (!currentUser) return;
-    setState(prev => {
-      const s = { ...prev.settings };
-      s[conversationId] = {
-        ...(s[conversationId] || {}),
-        [currentUser.id]: { ...(s[conversationId]?.[currentUser.id] || {}), pinned },
-      };
-      return { ...prev, settings: s };
-    });
-  }, [currentUser]);
+  const sendMessage = useCallback(async (conversationId, text, replyToId = null) => {
+    const cleanText = text?.trim();
+    if (!currentUser || !conversationId || !cleanText) return null;
 
-  // ── Mute / unmute
-  const muteConversation = useCallback((conversationId, muted) => {
-    if (!currentUser) return;
-    setState(prev => {
-      const s = { ...prev.settings };
-      s[conversationId] = {
-        ...(s[conversationId] || {}),
-        [currentUser.id]: { ...(s[conversationId]?.[currentUser.id] || {}), muted },
-      };
-      return { ...prev, settings: s };
-    });
-  }, [currentUser]);
-
-  // ── Publish announcement (admin only)
-  const publishAnnouncement = useCallback((title, content, priority = 'normal') => {
-    if (currentUser?.role !== 'admin') return;
-    const annId = convId.announcements();
-    const msg = {
-      id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-      conversationId: annId,
+    const temporaryId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const optimisticMessage = {
+      id: temporaryId,
+      conversationId,
       senderId: currentUser.id,
       senderName: currentUser.name,
-      text: content,
-      title,
-      priority,
-      reactions: {},
+      text: cleanText,
+      replyToId,
+      timestamp: new Date().toISOString(),
       edited: false,
       deleted: false,
-      timestamp: new Date().toISOString(),
-      isAnnouncement: true,
+      reactions: {},
+      pending: true,
     };
-    setState(prev => {
-      const msgs = [...(prev.messages[annId] || []), msg];
-      return { ...prev, messages: { ...prev.messages, [annId]: msgs } };
-    });
 
-    // Notify all active users
-    users.filter(u => u.status !== 'inactive' && u.id !== currentUser.id).forEach(u => {
-      pushNotification(u.id, `📢 ${title}: ${content.slice(0, 50)}`, annId);
-    });
-  }, [currentUser, users, pushNotification]);
+    setMessages(previous => ({
+      ...previous,
+      [conversationId]: [...(previous[conversationId] || []), optimisticMessage],
+    }));
+    setConversations(previous => ({
+      ...previous,
+      [conversationId]: {
+        ...previous[conversationId],
+        lastMessage: cleanText.slice(0, 200),
+        lastMessageAt: optimisticMessage.timestamp,
+      },
+    }));
 
-  // ── Derived helpers
-  const getConversationsForUser = useCallback((userId, role) => {
-    const convs = Object.values(stateRef.current.conversations);
-    return convs.filter(c => {
-      if (c.type === 'announcements') return true;
-      if (role === 'admin') return true;
-      return (c.participantIds || []).includes(userId);
-    });
+    try {
+      const message = await ConversationsAPI.sendMessage({ conversationId, text: cleanText, replyToId });
+      if (!message) throw new Error('The server did not return the sent message.');
+      setMessages(previous => ({
+        ...previous,
+        [conversationId]: (previous[conversationId] || []).map(item =>
+          item.id === temporaryId ? message : item
+        ),
+      }));
+      autoSyncBus.emit(SYNC_EVENTS.MESSAGE_SENT, { conversationId, message });
+      return message;
+    } catch (error) {
+      setMessages(previous => ({
+        ...previous,
+        [conversationId]: (previous[conversationId] || []).filter(item => item.id !== temporaryId),
+      }));
+      throw error;
+    }
+  }, [currentUser]);
+
+  const editMessage = useCallback(async (conversationId, messageId, newText) => {
+    const cleanText = newText?.trim();
+    if (!cleanText) return false;
+    const previousMessage = (messages[conversationId] || []).find(item => item.id === messageId);
+    if (!previousMessage) return false;
+
+    setMessages(previous => ({
+      ...previous,
+      [conversationId]: (previous[conversationId] || []).map(message =>
+        message.id === messageId ? { ...message, text: cleanText, edited: true, pending: true } : message
+      ),
+    }));
+
+    try {
+      const result = await ConversationsAPI.editMessage(messageId, cleanText);
+      setMessages(previous => ({
+        ...previous,
+        [conversationId]: (previous[conversationId] || []).map(message =>
+          message.id === messageId ? { ...message, ...(result || {}), text: cleanText, edited: true, pending: false } : message
+        ),
+      }));
+      return true;
+    } catch (error) {
+      setMessages(previous => ({
+        ...previous,
+        [conversationId]: (previous[conversationId] || []).map(message =>
+          message.id === messageId ? previousMessage : message
+        ),
+      }));
+      throw error;
+    }
+  }, [messages]);
+
+  const deleteMessage = useCallback(async () => {
+    throw new Error('Message deletion is permanently disabled.');
   }, []);
 
-  const getMessages = useCallback((conversationId) => {
-    return stateRef.current.messages[conversationId] || [];
-  }, []);
+  const addReaction = useCallback(async (conversationId, messageId, emoji) => {
+    if (!currentUser || !emoji) return false;
+    const previousMessage = (messages[conversationId] || []).find(item => item.id === messageId);
+    const previousReactions = previousMessage?.reactions || {};
 
+    setMessages(previous => ({
+      ...previous,
+      [conversationId]: (previous[conversationId] || []).map(message => {
+        if (message.id !== messageId) return message;
+        const reactions = { ...(message.reactions || {}) };
+        const users = reactions[emoji] || [];
+        reactions[emoji] = users.includes(currentUser.id)
+          ? users.filter(id => id !== currentUser.id)
+          : [...users, currentUser.id];
+        if (!reactions[emoji].length) delete reactions[emoji];
+        return { ...message, reactions };
+      }),
+    }));
+
+    try {
+      await ConversationsAPI.react(messageId, emoji);
+      return true;
+    } catch (error) {
+      setMessages(previous => ({
+        ...previous,
+        [conversationId]: (previous[conversationId] || []).map(message =>
+          message.id === messageId ? { ...message, reactions: previousReactions } : message
+        ),
+      }));
+      throw error;
+    }
+  }, [currentUser, messages]);
+
+  const markRead = useCallback(async (conversationId) => {
+    if (!currentUser || !conversationId) return;
+    const readAt = new Date().toISOString();
+    setSettings(prev => ({ ...prev, [conversationId]: { ...(prev[conversationId] || {}), lastReadAt: readAt } }));
+    try {
+      await ConversationsAPI.updateSettings({ conversationId, markRead: true });
+    } catch (error) {
+      console.warn('[MESSAGING] Unable to persist read state:', error);
+    }
+  }, [currentUser]);
+
+  const startDM = useCallback(async (targetUserId) => {
+    if (!currentUser || !targetUserId || targetUserId === currentUser.id) return null;
+    const conversationId = await ConversationsAPI.startDM(targetUserId);
+    if (!conversationId) throw new Error('The server did not return a conversation ID.');
+    await syncMessages();
+    return conversationId;
+  }, [currentUser, syncMessages]);
+
+  const updateSetting = useCallback(async (conversationId, patch) => {
+    const previous = settings[conversationId] || {};
+    setSettings(current => ({ ...current, [conversationId]: { ...previous, ...patch } }));
+    try {
+      await ConversationsAPI.updateSettings({ conversationId, ...patch });
+    } catch (error) {
+      setSettings(current => ({ ...current, [conversationId]: previous }));
+      throw error;
+    }
+  }, [settings]);
+  const pinConversation = useCallback((id, pinned) => updateSetting(id, { pinned }), [updateSetting]);
+  const muteConversation = useCallback((id, muted) => updateSetting(id, { muted }), [updateSetting]);
+
+  const publishAnnouncement = useCallback(async (title, content, priority = 'normal') => {
+    if (currentUser?.role !== 'admin') throw new Error('Only administrators can publish announcements.');
+    let channel = Object.values(conversations).find(item => item.type === 'announcements');
+    if (!channel) {
+      const data = await fetchConversations(true);
+      channel = (data?.conversations || []).find(item => item.type === 'announcements');
+    }
+    if (!channel) throw new Error('Company Announcements channel is unavailable.');
+    const message = await ConversationsAPI.sendMessage({
+      conversationId: channel.id, title, text: content, priority, isAnnouncement: true,
+    });
+    if (message) {
+      setMessages(prev => ({ ...prev, [channel.id]: [...(prev[channel.id] || []), message] }));
+    }
+    return message;
+  }, [currentUser, conversations, fetchConversations]);
+
+  const getConversationsForUser = useCallback((userId, role) =>
+    Object.values(conversations).filter(conversation =>
+      role === 'admin' || (conversation.participantIds || []).includes(userId)
+    ), [conversations]);
+  const getMessages = useCallback(id => messages[id] || [], [messages]);
   const getUnreadCount = useCallback((conversationId, userId) => {
-    const msgs = stateRef.current.messages[conversationId] || [];
-    const lastRead = stateRef.current.readStates[conversationId]?.[userId];
-    if (!lastRead) return msgs.filter(m => !m.deleted && m.senderId !== userId).length;
-    return msgs.filter(m => !m.deleted && m.senderId !== userId && m.timestamp > lastRead).length;
-  }, []);
-
-  const getUserSetting = useCallback((conversationId, userId) => {
-    return stateRef.current.settings[conversationId]?.[userId] || {};
-  }, []);
-
-  const getLastMessage = useCallback((conversationId) => {
-    const msgs = stateRef.current.messages[conversationId] || [];
-    const visible = msgs.filter(m => !m.deleted);
-    return visible[visible.length - 1] || null;
-  }, []);
+    const lastReadAt = settings[conversationId]?.lastReadAt;
+    return (messages[conversationId] || []).filter(message => {
+      if (message.deleted || message.senderId === userId) return false;
+      if (!lastReadAt) return true;
+      return new Date(message.timestamp).getTime() > new Date(lastReadAt).getTime();
+    }).length;
+  }, [messages, settings]);
+  const getUserSetting = useCallback(id => settings[id] || {}, [settings]);
+  const getLastMessage = useCallback(id => {
+    const list = messages[id] || [];
+    return [...list].reverse().find(message => !message.deleted) || null;
+  }, [messages]);
 
   const value = {
-    // State (reactive)
-    conversations: state.conversations,
-    messages: state.messages,
-    readStates: state.readStates,
-    settings: state.settings,
-    // Actions
-    sendMessage,
-    editMessage,
-    deleteMessage,
-    addReaction,
-    markRead,
-    startDM,
-    pinConversation,
-    muteConversation,
-    publishAnnouncement,
-    // Derived
-    getConversationsForUser,
-    getMessages,
-    getUnreadCount,
-    getUserSetting,
-    getLastMessage,
-    convId,
+    conversations, messages, settings, loading,
+    refreshConversations: fetchConversations,
+    syncMessages,
+    sendMessage, editMessage, deleteMessage, addReaction, markRead, startDM,
+    pinConversation, muteConversation, publishAnnouncement,
+    getConversationsForUser, getMessages, getUnreadCount, getUserSetting, getLastMessage,
   };
-
   return <MessagingContext.Provider value={value}>{children}</MessagingContext.Provider>;
 }
 
 export function useMessaging() {
-  const ctx = useContext(MessagingContext);
-  if (!ctx) throw new Error('useMessaging must be used within MessagingProvider');
-  return ctx;
+  const context = useContext(MessagingContext);
+  if (!context) throw new Error('useMessaging must be used within MessagingProvider');
+  return context;
 }

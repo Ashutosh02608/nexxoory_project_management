@@ -276,8 +276,12 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     start_date TIMESTAMPTZ NOT NULL,
     end_date TIMESTAMPTZ NOT NULL,
     project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+    team_id UUID REFERENCES teams(id) ON DELETE CASCADE,
+    department VARCHAR(100) DEFAULT NULL,
     location VARCHAR(255) DEFAULT 'Virtual',
     creator_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    description TEXT,
+    is_all_day BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -333,10 +337,12 @@ CREATE TABLE IF NOT EXISTS messages (
     conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     sender_id UUID REFERENCES users(id) ON DELETE SET NULL,
     text TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_updated ON messages(conversation_id, updated_at);
 
 -- Normalized Emoji Reactions
 CREATE TABLE IF NOT EXISTS message_reactions (
@@ -354,7 +360,7 @@ CREATE INDEX IF NOT EXISTS idx_reactions_message ON message_reactions(message_id
 -- =============================================================================
 
 DO $$ BEGIN
-    CREATE TYPE notification_type AS ENUM ('task', 'project', 'deadline', 'announcement', 'mention');
+    CREATE TYPE notification_type AS ENUM ('task', 'project', 'deadline', 'announcement', 'mention', 'calendar_event');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
@@ -495,6 +501,13 @@ DO $$ BEGIN
         WHERE trigger_schema = CURRENT_SCHEMA() AND event_object_table = 'calendar_events' AND trigger_name = 'trg_calendar_events_updated_at'
     ) THEN
         CREATE TRIGGER trg_calendar_events_updated_at BEFORE UPDATE ON calendar_events FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.triggers
+        WHERE trigger_schema = CURRENT_SCHEMA() AND event_object_table = 'messages' AND trigger_name = 'trg_messages_updated_at'
+    ) THEN
+        CREATE TRIGGER trg_messages_updated_at BEFORE UPDATE ON messages FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
     END IF;
 END $$;
 

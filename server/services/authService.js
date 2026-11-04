@@ -1,11 +1,11 @@
 import crypto from 'crypto';
 import { query, transaction } from '../config/db.js';
 import { env } from '../config/env.js';
+import { sendOtpEmail } from './mailer.js';
 import {
   signAccessToken,
   generateSecureRandomToken,
   hashOpaqueToken,
-  timingSafeHashCompare,
 } from '../utils/jwt.js';
 import { verifyPassword, hashPassword } from '../utils/security.js';
 
@@ -61,7 +61,7 @@ export class AuthService {
     );
 
     // Clean user object before returning (remove password_hash, standardize avatar)
-    const { password_hash, avatar_url, ...safeUser } = user;
+    const { password_hash: _password_hash, avatar_url, ...safeUser } = user;
     safeUser.avatar = avatar_url || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150';
     safeUser.avatar_url = safeUser.avatar;
 
@@ -202,11 +202,11 @@ export class AuthService {
   }
 
   /**
-   * Creates a password reset token. Always succeeds generic to prevent user enumeration.
+   * Creates a password reset OTP and emails it via SMTP. Always succeeds generically to prevent user enumeration.
    */
   static async requestPasswordReset(email) {
     const userRes = await query(
-      `SELECT id, email, status FROM users WHERE email = $1;`,
+      `SELECT id, name, email, status FROM users WHERE email = $1;`,
       [email.toLowerCase()]
     );
 
@@ -216,11 +216,13 @@ export class AuthService {
     }
 
     const user = userRes.rows[0];
-    const rawResetToken = generateSecureRandomToken(32);
-    const tokenHash = hashOpaqueToken(rawResetToken);
+    
+    // Generate 6-digit numeric OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const tokenHash = hashOpaqueToken(`otp:${user.id}:${otp}`);
 
     const expiresAt = new Date();
-    expiresAt.setMinutes(expiresAt.getMinutes() + env.PASSWORD_RESET_EXPIRES_MINUTES);
+    expiresAt.setMinutes(expiresAt.getMinutes() + 5); // 5 minutes expiration
 
     // Invalidate existing active reset tokens for this user
     await query(
@@ -234,12 +236,75 @@ export class AuthService {
       [user.id, tokenHash, expiresAt]
     );
 
-    // In production without an email provider configured, do not print secret in response or production logs
-    if (!env.isProduction) {
-      console.log(`[DEV ONLY] Password reset token for ${email}: ${rawResetToken}`);
+    // Send via SMTP mailer
+    await sendOtpEmail({
+      toEmail: user.email,
+      userName: user.name || 'Team Member',
+      otpCode: otp,
+      expiresMinutes: 5
+    });
+
+    return { tokenCreated: true };
+  }
+
+  /**
+   * Verifies the 6-digit OTP and generates a single-use authorization token for password update.
+   */
+  static async verifyOtp(email, otp) {
+    if (!email || !otp) {
+      throw new Error('INVALID_INPUT');
     }
 
-    return { tokenCreated: true, rawResetToken: env.isProduction ? undefined : rawResetToken };
+    const userRes = await query(
+      `SELECT id FROM users WHERE email = $1;`,
+      [email.toLowerCase()]
+    );
+
+    if (userRes.rows.length === 0) {
+      throw new Error('INVALID_OTP');
+    }
+
+    const userId = userRes.rows[0].id;
+    const tokenHash = hashOpaqueToken(`otp:${userId}:${otp}`);
+
+    const tokenRes = await query(
+      `SELECT id, is_used, expires_at 
+       FROM password_reset_tokens 
+       WHERE user_id = $1 AND token_hash = $2 AND is_used = false
+       ORDER BY created_at DESC 
+       LIMIT 1;`,
+      [userId, tokenHash]
+    );
+
+    if (tokenRes.rows.length === 0) {
+      throw new Error('INVALID_OTP');
+    }
+
+    const tokenRow = tokenRes.rows[0];
+
+    if (new Date() > new Date(tokenRow.expires_at)) {
+      throw new Error('OTP_EXPIRED');
+    }
+
+    // Invalidate OTP row
+    await query(
+      `UPDATE password_reset_tokens SET is_used = true WHERE id = $1;`,
+      [tokenRow.id]
+    );
+
+    // Issue a short-lived authorization token (10 mins) for the password change step
+    const resetAuthToken = generateSecureRandomToken(32);
+    const authHash = hashOpaqueToken(resetAuthToken);
+    const authExpiresAt = new Date();
+    authExpiresAt.setMinutes(authExpiresAt.getMinutes() + 10);
+
+    await query(
+      `INSERT INTO password_reset_tokens (user_id, token_hash, is_used, expires_at)
+       VALUES ($1, $2, false, $3);`,
+      [userId, authHash, authExpiresAt]
+    );
+
+    return { resetToken: resetAuthToken };
   }
 
   /**

@@ -1,6 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
-  FolderArchive,
   Upload,
   Search,
   FileText,
@@ -11,16 +10,19 @@ import {
   Loader2,
   Folder,
   FolderOpen,
-  ArrowRight,
   MoveRight,
   Edit2,
   ArrowUpDown,
   ChevronRight,
   Users,
   ShieldCheck,
-  Lock
+  Lock,
+  UploadCloud,
+  FileCheck,
+  AlertCircle
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { getDocumentFile, fileToBase64 } from '../services/documentStorage';
 
 export default function DocumentsPage() {
   const {
@@ -31,6 +33,7 @@ export default function DocumentsPage() {
     assignFolderAccess,
     folderPermissions = [],
     projects = [],
+    teams = [],
     users = [],
     currentUser
   } = useApp();
@@ -63,34 +66,75 @@ export default function DocumentsPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // File Upload State
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [fileBlobUrl, setFileBlobUrl] = useState(null);
+  const fileInputRef = useRef(null);
+
   // Upload Form
   const [formData, setFormData] = useState({
     name: '',
     projectId: '', // '' = General
     type: 'PDF',
-    size: '1.4 MB',
-    content: 'Standard operating specifications and project architecture documentation.'
+    size: '',
+    content: '',
+    assignedUserIds: [] // Explicitly assigned employee IDs
   });
+  const [assignmentSearch, setAssignmentSearch] = useState('');
 
-  // Calculate folder accessibility for non-admin
+  // Calculate folder accessibility:
+  // - Admin: all folders.
+  // - General folder: globally accessible to all authenticated users.
+  // - Project folders: accessible if user is assigned to the project (manager, team member, direct member) OR explicit folder assignment.
   const hasFolderAccess = (folderKey) => {
     if (isAdmin) return true;
-    return folderPermissions.some(fp => fp.folderKey === String(folderKey) && fp.userId === currentUser?.id);
+    if (folderKey === 'general') return true;
+    // Check explicit folder permission first
+    const explicit = folderPermissions.some(fp => fp.folderKey === String(folderKey) && fp.userId === currentUser?.id);
+    if (explicit) return true;
+
+    // Check project assignment inheritance
+    const proj = projects.find(p => p.id === folderKey);
+    if (!proj) return false;
+
+    // 1. Project Manager / Team Leader
+    if (proj.managerId === currentUser?.id) return true;
+
+    // 2. Direct member assignment
+    if (Array.isArray(proj.memberIds) && proj.memberIds.includes(currentUser?.id)) return true;
+
+    // 3. Team assignment (primary_team_id or assigned team)
+    const assignedTeam = teams.find(t => t.id === proj.teamId);
+    if (assignedTeam) {
+      if (assignedTeam.leaderId === currentUser?.id) return true;
+      if (Array.isArray(assignedTeam.memberIds) && assignedTeam.memberIds.includes(currentUser?.id)) return true;
+    }
+
+    return false;
   };
 
-  // Determine authorized folders
+  // Determine authorized project folders via assignment inheritance
   const visibleProjects = projects.filter(p => isAdmin || hasFolderAccess(p.id));
-  const canSeeGeneral = isAdmin || hasFolderAccess('general');
+  const canSeeGeneral = true;
 
   // Filter documents authorized for the user:
-  // Admin sees all. Employees see files where assignedUserIds has their id OR parent folder is assigned to them.
+  // - Admin: all documents.
+  // - Team Leader / Member: automatically inherits access to ALL files inside authorized project folders,
+  //   plus explicit file shares (assignedUserIds) and uploaded files.
   const visibleDocuments = documents.filter(doc => {
     if (isAdmin) return true;
+    const isAuthor = doc.authorId === currentUser?.id;
     const directAssigned = Array.isArray(doc.assignedUserIds) && doc.assignedUserIds.includes(currentUser?.id);
     const parentFolderKey = doc.projectId ? String(doc.projectId) : 'general';
     const folderAssigned = hasFolderAccess(parentFolderKey);
-    return directAssigned || folderAssigned;
+    return isAuthor || directAssigned || folderAssigned;
   });
+
+  const canManageDoc = (doc) => {
+    if (!currentUser || !doc) return false;
+    if (isAdmin) return true;
+    return doc.authorId === currentUser.id;
+  };
 
   // Calculate folder metadata
   const generalDocs = visibleDocuments.filter(d => !d.projectId);
@@ -138,34 +182,139 @@ export default function DocumentsPage() {
       return sortOrder === 'desc' ? -comparison : comparison;
     });
 
+  const formatBytes = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
+  const getFormatFromFilename = (filename) => {
+    const ext = filename.split('.').pop()?.toUpperCase() || 'PDF';
+    if (['JPG', 'JPEG', 'PNG', 'WEBP', 'SVG'].includes(ext)) return 'IMAGE';
+    if (['DOC', 'DOCX'].includes(ext)) return 'DOC';
+    if (['XLS', 'XLSX', 'CSV'].includes(ext)) return 'SHEET';
+    if (['PPT', 'PPTX'].includes(ext)) return 'SLIDES';
+    if (['TXT', 'MD', 'JSON'].includes(ext)) return 'TXT';
+    if (['ZIP', 'TAR', 'GZ'].includes(ext)) return 'ARCHIVE';
+    return ext;
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // 25MB max size limit for browser IndexedDB
+    if (file.size > 25 * 1024 * 1024) {
+      setErrorMsg('Selected file exceeds the maximum 25 MB limit.');
+      return;
+    }
+
+    setErrorMsg('');
+    setSelectedFile(file);
+    const fmt = getFormatFromFilename(file.name);
+    setFormData(prev => ({
+      ...prev,
+      name: file.name,
+      size: formatBytes(file.size),
+      type: fmt,
+      content: prev.content || `Uploaded binary file: ${file.name} (${formatBytes(file.size)})`
+    }));
+  };
+
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.name) return;
+    if (!selectedFile && !formData.name) {
+      setErrorMsg('Please select a file to upload.');
+      return;
+    }
     setIsSubmitting(true);
     setErrorMsg('');
     try {
-      await updateDocument({
-        name: formData.name,
+      let fileBase64 = null;
+      if (selectedFile) {
+        fileBase64 = await fileToBase64(selectedFile);
+      }
+
+      const docPayload = {
+        name: formData.name || selectedFile.name,
         projectId: formData.projectId || null,
         folder: formData.projectId ? 'Project Document' : 'General',
-        size: formData.size,
-        type: formData.type,
-        content: formData.content,
+        size: formData.size || (selectedFile ? formatBytes(selectedFile.size) : '1.0 MB'),
+        sizeBytes: selectedFile ? selectedFile.size : 0,
+        type: formData.type || (selectedFile ? getFormatFromFilename(selectedFile.name) : 'PDF'),
+        mimeType: selectedFile ? selectedFile.type : 'application/pdf',
+        fileBase64,
+        content: formData.content || (selectedFile ? `File: ${selectedFile.name}` : ''),
         author: currentUser?.name || 'Administrator',
-        authorId: currentUser?.id
-      });
+        authorId: currentUser?.id,
+        assignedUserIds: formData.assignedUserIds || []
+      };
+
+      // 1. Create document directly in central database (binary stored in PostgreSQL BYTEA)
+      await updateDocument(docPayload);
+
       setUploadModalOpen(false);
+      setSelectedFile(null);
       setFormData({
         name: '',
         projectId: currentFolder && currentFolder !== 'general' ? currentFolder : '',
         type: 'PDF',
-        size: '1.4 MB',
-        content: 'Standard operating specifications and project architecture documentation.'
+        size: '',
+        content: '',
+        assignedUserIds: []
       });
+      setAssignmentSearch('');
     } catch (err) {
+      console.error('[UPLOAD ERROR]', err);
       setErrorMsg(err.message || 'Failed to upload document');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleDownloadDoc = async (doc) => {
+    try {
+      const stored = await getDocumentFile(doc.id);
+      if (stored && stored.file) {
+        const url = URL.createObjectURL(stored.file);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = doc.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      } else {
+        // Fallback text download if binary blob not in IndexedDB
+        const blob = new Blob([doc.content || 'Document content'], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = doc.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      }
+    } catch (err) {
+      alert(`Could not download file: ${err.message}`);
+    }
+  };
+
+  const handlePreviewDoc = async (doc) => {
+    setPreviewDoc(doc);
+    try {
+      const stored = await getDocumentFile(doc.id);
+      if (stored && stored.file) {
+        const url = URL.createObjectURL(stored.file);
+        setFileBlobUrl(url);
+      } else {
+        setFileBlobUrl(null);
+      }
+    } catch {
+      setFileBlobUrl(null);
     }
   };
 
@@ -546,48 +695,54 @@ export default function DocumentsPage() {
                           </button>
                         )}
                         <button
-                          onClick={() => setPreviewDoc(doc)}
+                          onClick={() => handlePreviewDoc(doc)}
                           className="p-1 rounded text-[var(--text-sec)] hover:bg-[var(--bg-main)] cursor-pointer"
                           title="Preview"
                         >
                           <Eye className="w-3.5 h-3.5" />
                         </button>
+                        {canManageDoc(doc) && (
+                          <button
+                            onClick={() => {
+                              setRenameDoc(doc);
+                              setNewName(doc.name);
+                            }}
+                            className="p-1 rounded text-[var(--text-sec)] hover:bg-[var(--bg-main)] cursor-pointer"
+                            title="Rename"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {canManageDoc(doc) && (
+                          <button
+                            onClick={() => {
+                              setMoveDoc(doc);
+                              setTargetFolderProjectId(doc.projectId || '');
+                            }}
+                            className="p-1 rounded text-[var(--text-sec)] hover:text-[#635BFF] hover:bg-[var(--bg-main)] cursor-pointer"
+                            title="Move Folder"
+                          >
+                            <MoveRight className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         <button
-                          onClick={() => {
-                            setRenameDoc(doc);
-                            setNewName(doc.name);
-                          }}
-                          className="p-1 rounded text-[var(--text-sec)] hover:bg-[var(--bg-main)] cursor-pointer"
-                          title="Rename"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            setMoveDoc(doc);
-                            setTargetFolderProjectId(doc.projectId || '');
-                          }}
-                          className="p-1 rounded text-[var(--text-sec)] hover:text-[#635BFF] hover:bg-[var(--bg-main)] cursor-pointer"
-                          title="Move Folder"
-                        >
-                          <MoveRight className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => alert(`Simulating local download for ${doc.name}`)}
+                          onClick={() => handleDownloadDoc(doc)}
                           className="p-1 rounded text-[var(--text-sec)] hover:bg-[var(--bg-main)] cursor-pointer"
                           title="Download"
                         >
                           <Download className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          onClick={() => {
-                            if (window.confirm(`Delete document "${doc.name}"?`)) removeDocument(doc.id);
-                          }}
-                          className="p-1 rounded text-[var(--text-sec)] hover:text-[#E05252] cursor-pointer"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {canManageDoc(doc) && (
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`Delete document "${doc.name}"?`)) removeDocument(doc.id);
+                            }}
+                            className="p-1 rounded text-[var(--text-sec)] hover:text-[#E05252] cursor-pointer"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -625,6 +780,39 @@ export default function DocumentsPage() {
             </p>
 
             <div className="max-h-60 overflow-y-auto space-y-2 mb-4 border border-[var(--border)] rounded-xl p-3 bg-[var(--bg-main)]">
+              {/* Quick Team Select Pills */}
+              <div className="mb-2 pb-2 border-b border-[var(--border)]">
+                <span className="text-[10px] font-bold text-[var(--text-sec)] block mb-1.5 uppercase">Quick Add Teams</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {teams.map(t => {
+                    const allInTeam = (t.memberIds || []).concat(t.leaderId ? [t.leaderId] : []);
+                    const isAllSelected = allInTeam.length > 0 && allInTeam.every(uid => accessTarget.userIds?.includes(uid));
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => {
+                          setAccessTarget(prev => {
+                            const cur = prev.userIds || [];
+                            const next = isAllSelected
+                              ? cur.filter(uid => !allInTeam.includes(uid))
+                              : Array.from(new Set([...cur, ...allInTeam]));
+                            return { ...prev, userIds: next };
+                          });
+                        }}
+                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border transition-colors cursor-pointer ${
+                          isAllSelected
+                            ? 'bg-[#635BFF] text-white border-[#635BFF]'
+                            : 'bg-[var(--surface)] text-[var(--text-sec)] border-[var(--border)] hover:border-[#635BFF]'
+                        }`}
+                      >
+                        {isAllSelected ? '✓ ' : '+ '}{t.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               {users.filter(u => u.role !== 'admin').map(user => {
                 const isSelected = accessTarget.userIds?.includes(user.id);
                 return (
@@ -702,6 +890,12 @@ export default function DocumentsPage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
+
+            {fileBlobUrl && previewDoc.type === 'IMAGE' && (
+              <div className="mb-4 max-h-60 overflow-hidden rounded-xl border border-[var(--border)] flex items-center justify-center bg-[var(--bg-main)]">
+                <img src={fileBlobUrl} alt={previewDoc.name} className="max-h-60 object-contain" />
+              </div>
+            )}
 
             <div className="p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border)] text-xs text-[var(--text-sec)] mb-4 leading-relaxed">
               {previewDoc.content || 'Standard operating specifications and project architecture documentation.'}
@@ -819,10 +1013,56 @@ export default function DocumentsPage() {
 
             <form onSubmit={handleUploadSubmit} className="space-y-4">
               {errorMsg && (
-                <div className="p-3 text-xs bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg">
-                  {errorMsg}
+                <div className="p-3 text-xs bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{errorMsg}</span>
                 </div>
               )}
+
+              {/* File Selector Drag/Drop Area */}
+              <div>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+                {!selectedFile ? (
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="border-2 border-dashed border-[var(--border)] hover:border-[#635BFF] p-6 rounded-xl flex flex-col items-center justify-center cursor-pointer bg-[var(--bg-main)]/50 transition-colors group"
+                  >
+                    <UploadCloud className="w-8 h-8 text-[var(--text-sec)] group-hover:text-[#635BFF] transition-colors mb-2" />
+                    <p className="text-xs font-semibold text-[var(--text-main)]">
+                      Click to browse or drag file here
+                    </p>
+                    <p className="text-[10px] text-[var(--text-sec)] mt-1">
+                      Supports PDF, DOCX, XLSX, PPTX, TXT, PNG, JPG (Max 25 MB)
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 flex items-center justify-between">
+                    <div className="flex items-center gap-2.5 overflow-hidden">
+                      <FileCheck className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <div className="overflow-hidden">
+                        <p className="text-xs font-bold text-[var(--text-main)] truncate">{selectedFile.name}</p>
+                        <p className="text-[10px] text-[var(--text-sec)]">{formData.type} • {formData.size}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedFile(null);
+                        setFormData(prev => ({ ...prev, name: '', size: '', type: 'PDF' }));
+                      }}
+                      className="p-1 rounded text-[var(--text-sec)] hover:text-red-500 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">File Name *</label>
                 <input
@@ -852,23 +1092,122 @@ export default function DocumentsPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">File Format</label>
-                  <select
+                  <input
+                    type="text"
+                    readOnly
                     value={formData.type}
-                    onChange={(e) => setFormData({ ...formData, type: e.target.value })}
-                    className="w-full px-2.5 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
-                  >
-                    <option value="PDF">PDF</option>
-                    <option value="DOC">Word (.docx)</option>
-                  </select>
+                    className="w-full px-2.5 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)]/60 text-[var(--text-main)] outline-none cursor-not-allowed"
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">File Size</label>
                   <input
                     type="text"
+                    readOnly
                     value={formData.size}
-                    onChange={(e) => setFormData({ ...formData, size: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
+                    placeholder="Auto-detected"
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)]/60 text-[var(--text-main)] outline-none cursor-not-allowed"
                   />
+                </div>
+              </div>
+
+              {/* ASSIGN ACCESS TO SECTION */}
+              <div className="border border-[var(--border)] rounded-xl p-3 bg-[var(--bg-main)]">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-bold text-[var(--text-main)] flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-[#635BFF]" />
+                    <span>Assign Access To</span>
+                  </label>
+                  <span className="text-[10px] text-[var(--text-sec)]">
+                    {formData.assignedUserIds.length} recipients selected
+                  </span>
+                </div>
+
+                {/* Team Quick-select */}
+                <div className="mb-2.5">
+                  <span className="text-[10px] font-bold text-[var(--text-sec)] uppercase block mb-1">Add Whole Team</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {teams.map(t => {
+                      const teamUids = (t.memberIds || []).concat(t.leaderId ? [t.leaderId] : []);
+                      const isEntireTeamSelected = teamUids.length > 0 && teamUids.every(id => formData.assignedUserIds.includes(id));
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => {
+                            setFormData(prev => {
+                              const cur = prev.assignedUserIds || [];
+                              const next = isEntireTeamSelected
+                                ? cur.filter(id => !teamUids.includes(id))
+                                : Array.from(new Set([...cur, ...teamUids]));
+                              return { ...prev, assignedUserIds: next };
+                            });
+                          }}
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border transition-colors cursor-pointer ${
+                            isEntireTeamSelected
+                              ? 'bg-[#635BFF] text-white border-[#635BFF]'
+                              : 'bg-[var(--surface)] text-[var(--text-sec)] border-[var(--border)] hover:border-[#635BFF]'
+                          }`}
+                        >
+                          {isEntireTeamSelected ? '✓ ' : '+ '}{t.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Employee Search & Checkboxes */}
+                <div>
+                  <div className="relative mb-2">
+                    <Search className="w-3.5 h-3.5 text-[var(--text-sec)] absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Search employees or team leaders..."
+                      value={assignmentSearch}
+                      onChange={(e) => setAssignmentSearch(e.target.value)}
+                      className="w-full bg-[var(--surface)] border border-[var(--border)] rounded-lg pl-8 pr-3 py-1 text-xs text-[var(--text-main)] outline-none"
+                    />
+                  </div>
+
+                  <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
+                    {users
+                      .filter(u => u.role !== 'admin' && (
+                        u.name?.toLowerCase().includes(assignmentSearch.toLowerCase()) ||
+                        u.department?.toLowerCase().includes(assignmentSearch.toLowerCase()) ||
+                        u.role?.toLowerCase().includes(assignmentSearch.toLowerCase())
+                      ))
+                      .map(u => {
+                        const isSelected = formData.assignedUserIds.includes(u.id);
+                        return (
+                          <label
+                            key={u.id}
+                            className="flex items-center justify-between p-1.5 rounded-lg hover:bg-[var(--surface)] cursor-pointer text-xs transition-colors"
+                          >
+                            <div className="flex items-center gap-2">
+                              <div className="w-5 h-5 rounded-full bg-[#635BFF]/10 text-[#635BFF] text-[10px] font-bold flex items-center justify-center">
+                                {u.name?.charAt(0) || 'U'}
+                              </div>
+                              <span className="text-xs font-semibold text-[var(--text-main)]">{u.name}</span>
+                              <span className="text-[10px] text-[var(--text-sec)]">({u.role === 'project_manager' ? 'Team Leader' : 'Team Member'})</span>
+                            </div>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setFormData(prev => ({
+                                  ...prev,
+                                  assignedUserIds: checked
+                                    ? [...prev.assignedUserIds, u.id]
+                                    : prev.assignedUserIds.filter(id => id !== u.id)
+                                }));
+                              }}
+                              className="w-3.5 h-3.5 rounded text-[#635BFF] accent-[#635BFF] cursor-pointer"
+                            />
+                          </label>
+                        );
+                      })}
+                  </div>
                 </div>
               </div>
 
@@ -876,6 +1215,7 @@ export default function DocumentsPage() {
                 <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Document Description</label>
                 <textarea
                   rows="2"
+                  placeholder="Optional brief notes or description of this file..."
                   value={formData.content}
                   onChange={(e) => setFormData({ ...formData, content: e.target.value })}
                   className="w-full px-3 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
