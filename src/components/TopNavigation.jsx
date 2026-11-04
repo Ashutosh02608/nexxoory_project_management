@@ -47,42 +47,44 @@ export default function TopNavigation() {
   };
 
   return (
-    <header className="h-16 md:h-18 border-b border-[var(--border)] bg-[var(--surface)] px-3 sm:px-6 flex items-center justify-between sticky top-0 z-30 transition-colors">
+    <header className="h-16 md:h-18 border-b border-[var(--border)] bg-[var(--surface)] px-3 sm:px-6 flex items-center justify-between sticky top-0 z-30 transition-colors gap-2">
       {/* Mobile / Responsive Brand Badge & Search */}
-      <div className="flex items-center gap-2 sm:gap-4 flex-1 max-w-xl">
+      <div className="flex items-center gap-2 sm:gap-4 flex-1 min-w-0 max-w-xl">
         {/* Mobile Hamburger Drawer Trigger */}
         <button
           onClick={() => setMobileMenuOpen(true)}
           aria-label="Open navigation menu"
           className="md:hidden p-2 rounded-xl border border-[var(--border)] text-[var(--text-sec)] hover:bg-[var(--bg-main)] transition-colors cursor-pointer shrink-0"
         >
-          <Menu className="w-5 h-5" />
+          <Menu className="w-4 h-4" />
         </button>
 
-        <div className="md:hidden flex items-center gap-1 shrink-0">
+        <div className="hidden sm:flex md:hidden items-center gap-1 shrink-0">
           <img src={logoImg} alt="Nexxoory" className="h-7 w-auto object-contain" />
         </div>
 
+        {/* Search trigger button */}
         <button
           onClick={() => setSearchOpen(true)}
-          className="flex items-center gap-2 sm:gap-3 px-3 py-1.5 sm:py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-sec)] text-xs sm:text-sm w-full max-w-md hover:border-[#1E6091] dark:hover:border-[#38BDF8] transition-all shadow-xs cursor-pointer text-left"
+          className="flex items-center gap-2 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-sec)] text-xs sm:text-sm flex-1 min-w-0 hover:border-[#1E6091] dark:hover:border-[#38BDF8] transition-all shadow-xs cursor-pointer text-left"
         >
-          <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[var(--text-sec)] shrink-0" />
-          <span className="flex-1 truncate text-xs">Search projects, tasks, employees...</span>
-          <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] bg-[var(--surface)] border border-[var(--border)] rounded font-mono">⌘K</kbd>
+          <Search className="w-3.5 h-3.5 text-[var(--text-sec)] shrink-0" />
+          <span className="truncate text-xs">Search...</span>
+          <kbd className="hidden sm:inline-block ml-auto px-1.5 py-0.5 text-[10px] bg-[var(--surface)] border border-[var(--border)] rounded font-mono">⌘K</kbd>
         </button>
       </div>
 
       {/* Action controls */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
         {/* Quick create action (Admin & PM only) */}
         {(currentUser?.role === 'admin' || currentUser?.role === 'project_manager') && (
           <button
             onClick={() => setQuickCreateOpen(true)}
-            className="flex items-center gap-2 bg-[#1E6091] hover:bg-[#143A52] text-white text-xs font-bold px-3.5 py-2 rounded-xl shadow-xs transition-all cursor-pointer"
+            aria-label="Create New"
+            className="flex items-center justify-center p-2 sm:px-3.5 sm:py-2 bg-[#1E6091] hover:bg-[#143A52] text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            <span className="hidden sm:inline">Create New</span>
+            <span className="hidden sm:inline ml-1.5">Create New</span>
           </button>
         )}
 
