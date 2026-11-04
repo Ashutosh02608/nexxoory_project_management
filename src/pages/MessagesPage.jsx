@@ -185,7 +185,7 @@ function ConversationList({ section, convList, activeConvId, onSelect, search, o
   }, [convList, section, search, currentUser, getUserSetting, getLastMessage]);
 
   return (
-    <div className="w-72 shrink-0 border-r border-[var(--border)] bg-[var(--surface)] flex flex-col h-full min-h-0">
+    <div className="w-full lg:w-72 shrink-0 border-r border-[var(--border)] bg-[var(--surface)] flex flex-col h-full min-h-0">
       {/* Search */}
       <div className="p-3 border-b border-[var(--border)] shrink-0">
         <div className="relative">
@@ -447,10 +447,12 @@ function NewDMModal({ users, currentUser, onStart, onClose }) {
 function ConvInfoPanel({ conv, users, currentUser, onClose, onPin, onMute, pinned, muted }) {
   const participants = (conv?.participantIds || []).map(id => users.find(u => u.id === id)).filter(Boolean);
   return (
-    <div className="w-64 shrink-0 border-l border-[var(--border)] bg-[var(--bg-main)] flex flex-col">
+    <div className="absolute inset-0 z-40 bg-[var(--surface)] sm:static sm:z-auto sm:w-64 shrink-0 sm:border-l border-[var(--border)] sm:bg-[var(--bg-main)] flex flex-col h-full">
       <div className="p-4 border-b border-[var(--border)] flex items-center justify-between">
         <h3 className="text-xs font-bold text-[var(--text-main)]">Info</h3>
-        <button onClick={onClose}><X className="w-3.5 h-3.5 text-[var(--text-sec)]" /></button>
+        <button onClick={onClose} aria-label="Close details" className="p-1 rounded-lg hover:bg-[var(--bg-main)] cursor-pointer">
+          <X className="w-4 h-4 text-[var(--text-sec)]" />
+        </button>
       </div>
       <div className="p-4 flex-1 overflow-y-auto space-y-4">
         <div className="text-center">
@@ -827,25 +829,45 @@ export default function MessagesPage() {
 
   return (
     <div className="h-full w-full flex bg-[var(--surface)] border border-[var(--border)] rounded-2xl overflow-hidden shadow-xs relative">
-      {/* Left Nav — hidden on mobile unless list view */}
-      <div className={`${mobileView === 'chat' ? 'hidden lg:flex' : 'flex'} flex-col h-full min-h-0 shrink-0`}>
+      {/* Left Nav — visible on desktop (lg+), hidden on mobile/tablet */}
+      <div className="hidden lg:flex flex-col h-full min-h-0 shrink-0">
         <LeftNav activeSection={activeSection} onSection={(s) => { setActiveSection(s); setMobileView('list'); }} totalUnread={totalUnread} />
       </div>
 
-      {/* Middle: Conversation list */}
-      <div className={`${mobileView === 'chat' ? 'hidden lg:flex' : 'flex'} flex-col h-full min-h-0 shrink-0`}>
+      {/* Middle: Conversation list — on mobile shown when mobileView === 'list' */}
+      <div className={`${mobileView === 'chat' ? 'hidden lg:flex' : 'flex'} flex-col h-full min-h-0 w-full lg:w-72 shrink-0`}>
         <div className="flex-1 flex flex-col h-full min-h-0">
-          {/* Header for section */}
-          <div className="px-3 pt-3 pb-2 border-b border-[var(--border)] flex items-center justify-between bg-[var(--surface)] shrink-0">
-            <h3 className="text-xs font-bold text-[var(--text-main)] capitalize">
-              {NAV_SECTIONS.find(s => s.id === activeSection)?.label || 'All'}
-            </h3>
-            {activeSection === 'dm' && (
-              <button onClick={() => setShowNewDM(true)}
-                className="flex items-center gap-1 text-[10px] font-semibold text-[#635BFF] hover:text-[#4f46e5]">
-                <Plus className="w-3 h-3" /> New DM
-              </button>
-            )}
+          {/* Header for section with Mobile Category Switcher */}
+          <div className="px-3 pt-3 pb-2 border-b border-[var(--border)] flex flex-col gap-2 bg-[var(--surface)] shrink-0">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-[var(--text-main)] capitalize">
+                {NAV_SECTIONS.find(s => s.id === activeSection)?.label || 'All'}
+              </h3>
+              {activeSection === 'dm' && (
+                <button onClick={() => setShowNewDM(true)}
+                  className="flex items-center gap-1 text-[10px] font-semibold text-[#635BFF] hover:text-[#4f46e5] cursor-pointer">
+                  <Plus className="w-3 h-3" /> New DM
+                </button>
+              )}
+            </div>
+
+            {/* Mobile Category Switcher Pills (<lg only) */}
+            <div className="flex lg:hidden items-center gap-1 overflow-x-auto pb-1 scrollbar-none">
+              {NAV_SECTIONS.map(sec => {
+                const active = activeSection === sec.id;
+                return (
+                  <button
+                    key={sec.id}
+                    onClick={() => setActiveSection(sec.id)}
+                    className={`px-2 py-1 text-[10px] font-semibold rounded-lg shrink-0 transition-colors cursor-pointer ${
+                      active ? 'bg-[#635BFF] text-white shadow-xs' : 'bg-[var(--bg-main)] text-[var(--text-sec)] hover:text-[var(--text-main)]'
+                    }`}
+                  >
+                    {sec.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
           <ConversationList
             section={activeSection}
@@ -863,13 +885,16 @@ export default function MessagesPage() {
         </div>
       </div>
 
-      {/* Right: Chat */}
+      {/* Right: Chat — on mobile shown when mobileView === 'chat' */}
       <div className={`${mobileView === 'list' ? 'hidden lg:flex' : 'flex'} flex-1 flex-col h-full min-h-0 overflow-hidden`}>
-        {/* Mobile back button */}
+        {/* Mobile back button banner */}
         {mobileView === 'chat' && (
-          <div className="lg:hidden px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
-            <button onClick={() => setMobileView('list')} className="flex items-center gap-1 text-xs text-[#635BFF] font-semibold">
-              <ArrowLeft className="w-3.5 h-3.5" /> Back
+          <div className="lg:hidden px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 flex items-center justify-between">
+            <button
+              onClick={() => setMobileView('list')}
+              className="flex items-center gap-1 text-xs text-[#635BFF] hover:underline font-semibold cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4" /> Back to conversations
             </button>
           </div>
         )}
