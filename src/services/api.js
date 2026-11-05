@@ -273,3 +273,7 @@ export const ConversationsAPI = {
   updateSettings: async (payload) => await dataRequest('conversations', 'update-settings', payload),
 };
 
+export const EventsAPI = {
+  poll: async (afterId, limit = 50) => (await dataRequest('events', 'poll', { afterId, limit })) || { events: [], latestId: afterId },
+};
+

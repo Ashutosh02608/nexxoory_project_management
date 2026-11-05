@@ -14,6 +14,7 @@ import {
   clearAccessToken
 } from '../services/api';
 import { autoSyncBus, SYNC_EVENTS } from '../services/autoSync';
+import { realtimeSyncManager } from '../services/realtimeSync';
 import { playNotificationChime } from '../utils/soundEffects';
 import { AppContext } from './appContextValue';
 
@@ -338,6 +339,9 @@ export function AppProvider({ children }) {
 
   useEffect(() => {
     if (currentUser) {
+      // Start live database-backed event journal stream
+      realtimeSyncManager.start(currentUser);
+
       // Reset notification tracking baseline when user switches
       knownNotificationIdsRef.current = new Set();
       notifBaselineEstablishedRef.current = false;
@@ -358,10 +362,12 @@ export function AppProvider({ children }) {
       document.addEventListener('visibilitychange', handleVisibilityChange);
 
       return () => {
+        realtimeSyncManager.stop();
         clearInterval(syncInterval);
         document.removeEventListener('visibilitychange', handleVisibilityChange);
       };
     } else {
+      realtimeSyncManager.stop();
       queueMicrotask(() => {
         setUsers([]);
         setTeams([]);

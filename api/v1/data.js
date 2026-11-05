@@ -4,6 +4,7 @@ import { query, transaction } from '../../server/config/db.js';
 import argon2 from 'argon2';
 import { saveContent, validateContent, ContentWorkflowError } from '../../server/utils/contentWorkflow.js';
 import { getTaskTypesForProjectType, getAllowedDeliveryCategories } from '../../shared/serviceTypes.js';
+import { recordAppEvent } from '../../server/services/eventJournal.js';
 
 const isUuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
 
@@ -60,6 +61,8 @@ export default async function handler(req, res) {
         return await handleAnnouncements(action, payload, authUser, res);
       case 'conversations':
         return await handleConversations(action, payload, authUser, res);
+      case 'events':
+        return await handleEvents(action, payload, authUser, res);
       default:
         return sendError(res, 400, 'UNKNOWN_ENTITY', `Entity "${entity}" is not recognized`);
     }
@@ -400,6 +403,14 @@ async function handleUsers(action, payload, authUser, res) {
 
     const newUser = insertResult.rows[0];
     await query(`INSERT INTO user_settings (user_id, theme) VALUES ($1, 'light') ON CONFLICT DO NOTHING;`, [newUser.id]);
+    await recordAppEvent({
+      eventType: 'user:created',
+      entityType: 'user',
+      entityId: newUser.id,
+      actorId: authUser.id,
+      payload: { user: newUser },
+      audienceType: 'global',
+    });
     return sendSuccess(res, { user: newUser }, 'User created', 201);
   }
 
@@ -426,7 +437,16 @@ async function handleUsers(action, payload, authUser, res) {
       UPDATE users SET ${updates.join(', ')} WHERE id = $1
       RETURNING id, name, email, role, designation, department, status, updated_at;
     `, values);
-    return sendSuccess(res, { user: result.rows[0] }, 'User updated');
+    const updatedUser = result.rows[0];
+    await recordAppEvent({
+      eventType: 'user:updated',
+      entityType: 'user',
+      entityId: updatedUser.id,
+      actorId: authUser.id,
+      payload: { user: updatedUser },
+      audienceType: 'global',
+    });
+    return sendSuccess(res, { user: updatedUser }, 'User updated');
   }
 
   if (action === 'delete-summary') {
@@ -532,6 +552,15 @@ async function handleUsers(action, payload, authUser, res) {
             updated_at = CURRENT_TIMESTAMP
         WHERE id = $1;
       `, [id]);
+
+      await recordAppEvent({
+        eventType: 'user:deleted',
+        entityType: 'user',
+        entityId: id,
+        actorId: authUser.id,
+        payload: { id },
+        audienceType: 'global',
+      }, client);
     });
 
     // Invalidate auth memory cache
@@ -584,7 +613,16 @@ async function handleTeams(action, payload, authUser, res) {
       return team;
     });
     if (!t) return sendError(res, 409, 'IDEMPOTENCY_CONFLICT', 'Mutation ID is already in use');
-    return sendSuccess(res, { team: { id: t.id, name: t.name, department: t.department, leaderId: t.leader_id, memberIds: memberIds || [] } }, 'Team created', 201);
+    const createdTeam = { id: t.id, name: t.name, department: t.department, leaderId: t.leader_id, memberIds: memberIds || [] };
+    await recordAppEvent({
+      eventType: 'team:created',
+      entityType: 'team',
+      entityId: t.id,
+      actorId: authUser.id,
+      payload: { team: createdTeam },
+      audienceType: 'global',
+    });
+    return sendSuccess(res, { team: createdTeam }, 'Team created', 201);
   }
 
   if (action === 'update') {
@@ -604,6 +642,14 @@ async function handleTeams(action, payload, authUser, res) {
           await client.query(`INSERT INTO team_members (team_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [id, uid]);
         }
       }
+      await recordAppEvent({
+        eventType: 'team:updated',
+        entityType: 'team',
+        entityId: id,
+        actorId: authUser.id,
+        payload: { team: { id, name, department, leaderId, description, color, memberIds } },
+        audienceType: 'global',
+      }, client);
       return true;
     });
     if (!updated) return sendError(res, 404, 'NOT_FOUND', 'Team not found');
@@ -613,6 +659,14 @@ async function handleTeams(action, payload, authUser, res) {
   if (action === 'delete') {
     if (authUser.role !== 'admin') return sendError(res, 403, 'FORBIDDEN', 'Admin only');
     await query('DELETE FROM teams WHERE id = $1', [payload.id]);
+    await recordAppEvent({
+      eventType: 'team:deleted',
+      entityType: 'team',
+      entityId: payload.id,
+      actorId: authUser.id,
+      payload: { id: payload.id },
+      audienceType: 'global',
+    });
     return sendSuccess(res, { id: payload.id }, 'Team deleted');
   }
 }
@@ -709,6 +763,14 @@ async function handleProjects(action, payload, authUser, res) {
       ON CONFLICT (conversation_id, user_id) DO NOTHING;
     `, [conversationId, project.id]);
 
+      await recordAppEvent({
+        eventType: 'project:created',
+        entityType: 'project',
+        entityId: project.id,
+        actorId: authUser.id,
+        payload: { project, conversationId },
+        audienceType: 'global',
+      }, client);
       return { project, conversationId };
     });
     if (!created) return sendError(res, 409, 'IDEMPOTENCY_CONFLICT', 'Mutation ID is already in use');
@@ -771,6 +833,14 @@ async function handleProjects(action, payload, authUser, res) {
         ON CONFLICT (conversation_id, user_id) DO NOTHING;
       `, [conversationId, teamId]);
       }
+      await recordAppEvent({
+        eventType: 'project:updated',
+        entityType: 'project',
+        entityId: id,
+        actorId: authUser.id,
+        payload: { id, conversationId },
+        audienceType: 'global',
+      }, client);
       return { conversationId };
     });
 
@@ -781,6 +851,14 @@ async function handleProjects(action, payload, authUser, res) {
   if (action === 'delete') {
     if (authUser.role !== 'admin') return sendError(res, 403, 'FORBIDDEN', 'Admin only');
     await query('DELETE FROM projects WHERE id = $1', [payload.id]);
+    await recordAppEvent({
+      eventType: 'project:deleted',
+      entityType: 'project',
+      entityId: payload.id,
+      actorId: authUser.id,
+      payload: { id: payload.id },
+      audienceType: 'global',
+    });
     return sendSuccess(res, { id: payload.id }, 'Project deleted');
   }
 }
@@ -908,6 +986,15 @@ async function handleTasks(action, payload, authUser, res) {
         `, [normalizedTask.assigneeId, `Task Assigned: ${normalizedTask.title}`, `You have been assigned to task "${normalizedTask.title}"`]);
       }
 
+      await recordAppEvent({
+        eventType: 'task:created',
+        entityType: 'task',
+        entityId: normalizedTask.id,
+        actorId: authUser.id,
+        payload: { task: normalizedTask },
+        audienceType: 'global',
+      }, client);
+
       return normalizedTask;
     });
     if (!task) return sendError(res, 403, 'FORBIDDEN', 'You cannot create tasks in this project or team');
@@ -953,6 +1040,14 @@ async function handleTasks(action, payload, authUser, res) {
           await client.query(`INSERT INTO task_comments (task_id, user_id, text) VALUES ($1, $2, $3);`, [id, authUser.id, last.text]);
         }
       }
+      await recordAppEvent({
+        eventType: 'task:updated',
+        entityType: 'task',
+        entityId: id,
+        actorId: authUser.id,
+        payload: { id, status, assigneeId, priority, title },
+        audienceType: 'global',
+      }, client);
       return true;
     });
     if (!updated) return sendError(res, 404, 'NOT_FOUND', 'Task not found or unavailable');
@@ -968,6 +1063,14 @@ async function handleTasks(action, payload, authUser, res) {
       [payload.id, authUser.id, authUser.role]
     );
     if (result.rowCount === 0) return sendError(res, 404, 'NOT_FOUND', 'Task not found or unavailable');
+    await recordAppEvent({
+      eventType: 'task:deleted',
+      entityType: 'task',
+      entityId: payload.id,
+      actorId: authUser.id,
+      payload: { id: payload.id },
+      audienceType: 'global',
+    });
     return sendSuccess(res, { id: payload.id }, 'Task deleted');
   }
   return sendError(res, 400, 'UNKNOWN_ACTION', 'Action is not supported for tasks');
@@ -2049,6 +2152,22 @@ async function handleConversations(action, payload, authUser, res) {
           ON CONFLICT DO NOTHING;
         `, [conversationId, authUser.id, 'New Company Announcement', (title || text || '').slice(0, 200)]);
       }
+      await recordAppEvent({
+        eventType: 'message:created',
+        entityType: 'message',
+        entityId: savedMessage.id,
+        actorId: authUser.id,
+        payload: {
+          message: {
+            ...savedMessage,
+            senderName: authUser.name,
+            reactions: {},
+          },
+          conversationId,
+        },
+        audienceType: 'conversation',
+        audienceId: conversationId,
+      }, client);
       return savedMessage;
     });
     if (!message) return sendError(res, 409, 'IDEMPOTENCY_CONFLICT', 'Mutation ID is already in use');
@@ -2118,10 +2237,21 @@ async function handleConversations(action, payload, authUser, res) {
       UPDATE messages
       SET text = $1, is_edited = true, updated_at = CURRENT_TIMESTAMP
       WHERE id = $2
-      RETURNING id, text, is_edited AS edited, updated_at;
+      RETURNING id, conversation_id AS "conversationId", text, is_edited AS edited, updated_at;
     `, [text.trim(), messageId]);
 
-    return sendSuccess(res, { message: result.rows[0] }, 'Message edited');
+    const updatedMsg = result.rows[0];
+    await recordAppEvent({
+      eventType: 'message:updated',
+      entityType: 'message',
+      entityId: messageId,
+      actorId: authUser.id,
+      payload: { message: updatedMsg, conversationId: msg.conversation_id },
+      audienceType: 'conversation',
+      audienceId: msg.conversation_id,
+    });
+
+    return sendSuccess(res, { message: updatedMsg }, 'Message edited');
   }
 
   if (action === 'delete') {
@@ -2132,7 +2262,7 @@ async function handleConversations(action, payload, authUser, res) {
     const { messageId, emoji } = payload;
     if (!messageId || !emoji || emoji.length > 20) return sendError(res, 400, 'VALIDATION_ERROR', 'Valid message ID and emoji are required');
     const allowed = await query(`
-      SELECT m.id FROM messages m
+      SELECT m.id, m.conversation_id FROM messages m
       JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id
       WHERE m.id = $1 AND cp.user_id = $2 AND m.is_deleted = false;
     `, [messageId, authUser.id]);
@@ -2148,6 +2278,20 @@ async function handleConversations(action, payload, authUser, res) {
       `, [messageId, authUser.id, emoji]);
     }
     await query(`UPDATE messages SET updated_at = CURRENT_TIMESTAMP WHERE id = $1;`, [messageId]);
+
+    const convRow = allowed.rows[0];
+    if (convRow?.conversation_id) {
+      await recordAppEvent({
+        eventType: 'message:reaction',
+        entityType: 'message',
+        entityId: messageId,
+        actorId: authUser.id,
+        payload: { messageId, emoji, userId: authUser.id, conversationId: convRow.conversation_id },
+        audienceType: 'conversation',
+        audienceId: convRow.conversation_id,
+      });
+    }
+
     return sendSuccess(res, { messageId, emoji }, 'Reaction updated');
   }
 
@@ -2206,4 +2350,71 @@ async function handleConversations(action, payload, authUser, res) {
   }
 
   return sendError(res, 400, 'UNKNOWN_ACTION', 'Unsupported conversation action');
+}
+
+// -------------------------------------------------------------
+// REAL-TIME EVENT STREAM / EVENT JOURNAL HANDLER
+// -------------------------------------------------------------
+async function handleEvents(action, payload, authUser, res) {
+  if (action === 'poll') {
+    const afterId = Number(payload.afterId || 0);
+    const limit = Math.min(Math.max(Number(payload.limit || 50), 1), 100);
+
+    // Retrieve events that authUser is authorized to observe:
+    // 1. global audience
+    // 2. user audience targeted to authUser.id
+    // 3. conversation audience where authUser is a participant (or admin)
+    // 4. project audience where authUser has project scope
+    // 5. team audience where authUser is a team member / leader
+    const eventsQuery = `
+      SELECT e.id, e.event_type AS "eventType", e.entity_type AS "entityType",
+             e.entity_id AS "entityId", e.actor_id AS "actorId", e.payload,
+             e.audience_type AS "audienceType", e.audience_id AS "audienceId",
+             e.created_at AS "createdAt"
+      FROM app_events e
+      WHERE e.id > $1
+        AND (
+          e.audience_type = 'global'
+          OR (e.audience_type = 'user' AND e.audience_id = $2)
+          OR (e.audience_type = 'conversation' AND (
+            $3 = 'admin' OR EXISTS (
+              SELECT 1 FROM conversation_participants cp
+              WHERE cp.conversation_id::text = e.audience_id AND cp.user_id = $2
+            )
+          ))
+          OR (e.audience_type = 'project' AND (
+            $3 = 'admin' OR EXISTS (
+              SELECT 1 FROM projects p WHERE p.id::text = e.audience_id AND (
+                p.manager_id = $2 OR EXISTS (
+                  SELECT 1 FROM teams pt WHERE pt.id = p.primary_team_id AND (
+                    pt.leader_id = $2 OR EXISTS (
+                      SELECT 1 FROM team_members ptm WHERE ptm.team_id = pt.id AND ptm.user_id = $2
+                    )
+                  )
+                )
+              )
+            )
+          ))
+          OR (e.audience_type = 'team' AND (
+            $3 = 'admin' OR EXISTS (
+              SELECT 1 FROM teams t WHERE t.id::text = e.audience_id AND (
+                t.leader_id = $2 OR EXISTS (
+                  SELECT 1 FROM team_members tm WHERE tm.team_id = t.id AND tm.user_id = $2
+                )
+              )
+            )
+          ))
+        )
+      ORDER BY e.id ASC
+      LIMIT $4;
+    `;
+
+    const result = await query(eventsQuery, [afterId, authUser.id, authUser.role, limit]);
+    const events = result.rows;
+    const latestId = events.length > 0 ? events[events.length - 1].id : afterId;
+
+    return sendSuccess(res, { events, latestId }, 'Events retrieved');
+  }
+
+  return sendError(res, 400, 'UNKNOWN_ACTION', 'Unsupported events action');
 }

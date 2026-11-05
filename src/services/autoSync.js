@@ -176,9 +176,12 @@ export const SYNC_EVENTS = {
 
   // Messaging
   MESSAGE_SENT: 'message:sent',
+  MESSAGE_UPDATED: 'message:updated',
+  MESSAGE_REACTION: 'message:reaction',
   CONVERSATION_UPDATED: 'conversation:updated',
 
   // General App Sync
-  APP_REFRESH: 'app:refresh'
+  APP_REFRESH: 'app:refresh',
+  REALTIME_EVENT: 'realtime:event'
 };
 

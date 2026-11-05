@@ -191,8 +191,60 @@ export function MessagingProvider({ children }) {
   useEffect(() => {
     if (!currentUser) return undefined;
 
-    // Listen to autoSync bus for instant cross-tab message updates
-    const unsub = autoSyncBus.on(SYNC_EVENTS.MESSAGE_SENT, () => {
+    // Direct event listener for real-time messages received from server journal or other tabs
+    const unsubSent = autoSyncBus.on(SYNC_EVENTS.MESSAGE_SENT, (payload) => {
+      if (payload?.message && payload?.conversationId) {
+        const msg = payload.message;
+        const cid = payload.conversationId;
+
+        // Immediate state update without waiting for network round-trip
+        setMessages(previous => {
+          const list = previous[cid] || [];
+          if (list.some(m => m.id === msg.id)) return previous;
+          return { ...previous, [cid]: [...list, msg] };
+        });
+
+        setConversations(previous => {
+          const existing = previous[cid];
+          if (!existing) return previous;
+          return {
+            ...previous,
+            [cid]: {
+              ...existing,
+              lastMessage: (msg.title || msg.text || '').slice(0, 200),
+              lastMessageAt: msg.timestamp || new Date().toISOString(),
+            }
+          };
+        });
+
+        // Trigger chime if message is from another user and not yet processed
+        if (msg.id && !knownMessageIdsRef.current.has(msg.id)) {
+          knownMessageIdsRef.current.add(msg.id);
+          if (msg.senderId !== currentUser?.id && messagesBaselineEstablishedRef.current) {
+            playMessageChime(currentUser.id);
+          }
+        }
+      }
+      // Also invoke syncMessages to reconcile full state and cursors
+      syncMessages();
+    });
+
+    const unsubUpdated = autoSyncBus.on(SYNC_EVENTS.MESSAGE_UPDATED, (payload) => {
+      if (payload?.message?.id && payload?.conversationId) {
+        const msg = payload.message;
+        const cid = payload.conversationId;
+        setMessages(previous => {
+          const list = previous[cid] || [];
+          return {
+            ...previous,
+            [cid]: list.map(item => item.id === msg.id ? { ...item, ...msg } : item)
+          };
+        });
+      }
+      syncMessages();
+    });
+
+    const unsubReaction = autoSyncBus.on(SYNC_EVENTS.MESSAGE_REACTION, () => {
       syncMessages();
     });
 
@@ -205,7 +257,9 @@ export function MessagingProvider({ children }) {
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
-      unsub();
+      unsubSent();
+      unsubUpdated();
+      unsubReaction();
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
     };
