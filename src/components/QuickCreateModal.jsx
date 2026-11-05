@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { X, FolderKanban, ListTodo, Users, Megaphone, Loader2 } from 'lucide-react';
 import { useApp } from '../context/useApp';
 import { DEPARTMENTS, DEFAULT_DEPARTMENT } from '../constants/departments';
+import { projectTypes, getTaskTypesForProjectType, deliverySchedules, getAllowedDeliveryCategories } from '../../shared/serviceTypes';
 
 export default function QuickCreateModal() {
   const {
@@ -29,6 +30,18 @@ export default function QuickCreateModal() {
   // Task form state
   const [taskTitle, setTaskTitle] = useState('');
   const [taskProjectId, setTaskProjectId] = useState(projects[0]?.id || '');
+  const [taskType, setTaskType] = useState(() => {
+    const p = projects[0];
+    const types = getTaskTypesForProjectType(p?.content?.projectType);
+    return types[0] || 'Post';
+  });
+  const [taskDeliveryCategory, setTaskDeliveryCategory] = useState(() => {
+    const p = projects[0];
+    const allowed = getAllowedDeliveryCategories(p?.content?.deliverySchedule);
+    return allowed[0] || 'Monthly Deliverable';
+  });
+  const [taskAssignmentType, setTaskAssignmentType] = useState('individual'); // 'individual' | 'team'
+  const [taskTeamId, setTaskTeamId] = useState('');
   const [taskAssigneeId, setTaskAssigneeId] = useState(users[0]?.id || '');
   const [taskPriority, setTaskPriority] = useState('Medium');
   const [taskDueDate, setTaskDueDate] = useState('');
@@ -36,6 +49,8 @@ export default function QuickCreateModal() {
   // Project form state
   const [projName, setProjName] = useState('');
   const [projDesc, setProjDesc] = useState('');
+  const [projType, setProjType] = useState('Social Media Marketing');
+  const [projDeliverySchedule, setProjDeliverySchedule] = useState('Monthly Deliverables');
   const [projPriority, setProjPriority] = useState('Medium');
   const [projDueDate, setProjDueDate] = useState('');
 
@@ -60,18 +75,29 @@ export default function QuickCreateModal() {
     setIsSubmitting(true);
     setErrorMsg('');
     try {
+      const selectedProj = projects.find(p => p.id === taskProjectId);
+      const isSocial = isSocialProject(selectedProj?.content);
+      const effectiveDueDate = taskDueDate || '2026-11-30';
+      const taskContent = {
+        contentType: taskType,
+        deliveryCategory: taskDeliveryCategory,
+        ...(isSocial && effectiveDueDate ? { postDate: effectiveDueDate } : {})
+      };
+
       await updateTask({
         title: taskTitle,
         projectId: taskProjectId || null,
+        teamId: taskAssignmentType === 'team' ? (taskTeamId || null) : null,
         assigneeId: taskAssigneeId || null,
         priority: taskPriority,
         status: 'To Do',
-        dueDate: taskDueDate || '2026-11-30',
+        dueDate: effectiveDueDate,
         startDate: new Date().toISOString().split('T')[0],
         progress: 0,
         labels: ['General'],
         subtasks: [],
-        comments: []
+        comments: [],
+        content: taskContent
       });
       setTaskTitle('');
       setQuickCreateOpen(false);
@@ -103,7 +129,8 @@ export default function QuickCreateModal() {
         spent: 0,
         managerId: currentUser.id,
         teamId: null,
-        tags: ['Core']
+        tags: ['Core'],
+        content: { projectType: projType, deliverySchedule: projDeliverySchedule }
       });
       setProjName('');
       setProjDesc('');
@@ -248,33 +275,157 @@ export default function QuickCreateModal() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-[var(--text-main)] mb-1">Associated Project</label>
                   <select
                     value={taskProjectId}
-                    onChange={(e) => setTaskProjectId(e.target.value)}
+                    onChange={(e) => {
+                      const newId = e.target.value;
+                      setTaskProjectId(newId);
+                      const proj = projects.find(p => p.id === newId);
+                      const types = getTaskTypesForProjectType(proj?.content?.projectType);
+                      const allowedCats = getAllowedDeliveryCategories(proj?.content?.deliverySchedule);
+                      setTaskType(types[0] || 'General Task');
+                      setTaskDeliveryCategory(allowedCats[0] || 'Monthly Deliverable');
+                    }}
                     className="w-full px-2.5 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] focus:outline-none"
                   >
                     <option value="">None (Unplanned Task)</option>
                     {projects.map(p => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
+                      <option key={p.id} value={p.id}>{p.name} ({p.content?.projectType || 'Other'})</option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-[var(--text-main)] mb-1">Assignee</label>
-                  <select
-                    value={taskAssigneeId}
-                    onChange={(e) => setTaskAssigneeId(e.target.value)}
-                    className="w-full px-2.5 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] focus:outline-none"
-                  >
-                    <option value="">Unassigned</option>
-                    {users.map(u => (
-                      <option key={u.id} value={u.id}>{u.name}</option>
-                    ))}
-                  </select>
+                  <label className="block text-xs font-medium text-[var(--text-main)] mb-1">
+                    Task Type <span className="text-[10px] text-[var(--text-sec)]">({projects.find(p => p.id === taskProjectId)?.content?.projectType || 'General'})</span>
+                  </label>
+                  {(() => {
+                    const selProj = projects.find(p => p.id === taskProjectId);
+                    const types = getTaskTypesForProjectType(selProj?.content?.projectType);
+                    return (
+                      <select
+                        value={taskType}
+                        onChange={(e) => setTaskType(e.target.value)}
+                        className="w-full px-2.5 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] focus:outline-none"
+                      >
+                        {types.map(t => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                    );
+                  })()}
                 </div>
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-main)] mb-1">
+                    Delivery Category
+                  </label>
+                  {(() => {
+                    const selProj = projects.find(p => p.id === taskProjectId);
+                    const allowedCats = getAllowedDeliveryCategories(selProj?.content?.deliverySchedule);
+                    return (
+                      <select
+                        value={taskDeliveryCategory}
+                        onChange={(e) => setTaskDeliveryCategory(e.target.value)}
+                        className="w-full px-2.5 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] focus:outline-none"
+                      >
+                        {allowedCats.map(cat => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                      </select>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* Assignment Type: Individual vs Team */}
+              <div className="border border-[var(--border)] bg-[var(--bg-main)]/50 p-3 rounded-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-[var(--text-main)]">Assignment</label>
+                  <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTaskAssignmentType('individual');
+                        setTaskTeamId('');
+                      }}
+                      className={`px-2.5 py-0.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
+                        taskAssignmentType === 'individual' ? 'bg-[#635BFF] text-white shadow-xs' : 'text-[var(--text-sec)] hover:text-[var(--text-main)]'
+                      }`}
+                    >
+                      Individual
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTaskAssignmentType('team');
+                        if (!taskTeamId && teams.length > 0) {
+                          setTaskTeamId(teams[0].id);
+                        }
+                      }}
+                      className={`px-2.5 py-0.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
+                        taskAssignmentType === 'team' ? 'bg-[#635BFF] text-white shadow-xs' : 'text-[var(--text-sec)] hover:text-[var(--text-main)]'
+                      }`}
+                    >
+                      Team
+                    </button>
+                  </div>
+                </div>
+
+                {taskAssignmentType === 'individual' ? (
+                  <div>
+                    <label className="block text-[11px] font-medium text-[var(--text-sec)] mb-1">Assignee</label>
+                    <select
+                      value={taskAssigneeId}
+                      onChange={(e) => setTaskAssigneeId(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-main)] focus:outline-none"
+                    >
+                      <option value="">Unassigned</option>
+                      {users.filter(u => u.status === 'Active').map(u => (
+                        <option key={u.id} value={u.id}>{u.name} ({u.designation})</option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-medium text-[var(--text-sec)] mb-1">Team *</label>
+                      <select
+                        required
+                        value={taskTeamId}
+                        onChange={(e) => {
+                          const tid = e.target.value;
+                          setTaskTeamId(tid);
+                          if (!teams.find(t => t.id === tid)?.memberIds?.includes(taskAssigneeId)) {
+                            setTaskAssigneeId('');
+                          }
+                        }}
+                        className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-main)] focus:outline-none"
+                      >
+                        <option value="">Select Team</option>
+                        {teams.map(t => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-[var(--text-sec)] mb-1">Responsible Member</label>
+                      <select
+                        value={taskAssigneeId}
+                        onChange={(e) => setTaskAssigneeId(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-main)] focus:outline-none"
+                      >
+                        <option value="">Whole Team</option>
+                        {users
+                          .filter(u => teams.find(t => t.id === taskTeamId)?.memberIds?.includes(u.id))
+                          .map(u => (
+                            <option key={u.id} value={u.id}>{u.name}</option>
+                          ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -342,6 +493,33 @@ export default function QuickCreateModal() {
                   onChange={(e) => setProjName(e.target.value)}
                   className="w-full px-3 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] focus:outline-none"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-main)] mb-1">Project Type</label>
+                  <select
+                    value={projType}
+                    onChange={(e) => setProjType(e.target.value)}
+                    className="w-full px-2.5 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] focus:outline-none"
+                  >
+                    {projectTypes.map(t => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-main)] mb-1">Delivery Schedule</label>
+                  <select
+                    value={projDeliverySchedule}
+                    onChange={(e) => setProjDeliverySchedule(e.target.value)}
+                    className="w-full px-2.5 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] focus:outline-none"
+                  >
+                    {deliverySchedules.map(s => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div>
@@ -436,7 +614,7 @@ export default function QuickCreateModal() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-[var(--text-main)] mb-1">Team Leader</label>
+                  <label className="block text-xs font-medium text-[var(--text-main)] mb-1">Project Manager</label>
                   <select
                     value={teamLeader}
                     onChange={(e) => setTeamLeader(e.target.value)}

@@ -1190,7 +1190,7 @@ export default function DocumentsPage() {
                                 {u.name?.charAt(0) || 'U'}
                               </div>
                               <span className="text-xs font-semibold text-[var(--text-main)]">{u.name}</span>
-                              <span className="text-[10px] text-[var(--text-sec)]">({u.role === 'project_manager' ? 'Team Leader' : 'Team Member'})</span>
+                              <span className="text-[10px] text-[var(--text-sec)]">({u.role === 'project_manager' ? 'Project Manager' : 'Team Member'})</span>
                             </div>
                             <input
                               type="checkbox"

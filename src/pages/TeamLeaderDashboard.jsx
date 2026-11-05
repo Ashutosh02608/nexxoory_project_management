@@ -160,7 +160,7 @@ export default function TeamLeaderDashboard() {
       {/* A. Welcome Banner */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 rounded-2xl bg-[var(--surface)] border border-[var(--border)] shadow-xs">
         <div>
-          <span className="text-[11px] font-bold text-[#635BFF] uppercase tracking-wider">Team Leader Overview</span>
+          <span className="text-[11px] font-bold text-[#635BFF] uppercase tracking-wider">Project Manager Overview</span>
           <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-main)] tracking-tight mt-1">
             Welcome back, {currentUser?.name}
           </h1>
@@ -250,7 +250,6 @@ export default function TeamLeaderDashboard() {
                 {managedProjects.slice(0, 4).map(p => {
                   const pTasks = scopedTasks.filter(t => t.projectId === p.id);
                   const pDone = pTasks.filter(t => t.status === 'Completed').length;
-                  const prog = pTasks.length > 0 ? Math.round((pDone / pTasks.length) * 100) : (p.progress || 0);
 
                   return (
                     <div
@@ -272,13 +271,6 @@ export default function TeamLeaderDashboard() {
                         }`}>
                           {p.status}
                         </span>
-                      </div>
-                      {/* Progress bar */}
-                      <div className="mt-2.5 flex items-center gap-2">
-                        <div className="flex-1 h-1.5 bg-[var(--border)] rounded-full overflow-hidden">
-                          <div className="h-full bg-[#1E6091] rounded-full transition-all duration-300" style={{ width: `${prog}%` }} />
-                        </div>
-                        <span className="text-[10px] font-bold text-[var(--text-sec)]">{prog}%</span>
                       </div>
                     </div>
                   );

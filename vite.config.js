@@ -1,8 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import path from 'path';
-import { pathToFileURL } from 'url';
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -63,10 +61,9 @@ export default defineConfig({
             const parsedUrl = new URL(req.url, 'http://localhost:5173');
             req.query = Object.fromEntries(parsedUrl.searchParams.entries());
 
-            const absPath = path.resolve(process.cwd(), relPath);
-            const fileUrl = `${pathToFileURL(absPath).href}?t=${Date.now()}`;
-
-            const { default: handler } = await import(fileUrl);
+            // Use Vite's dependency graph so edits to server helpers invalidate
+            // the API handler too, rather than retaining Node's cached imports.
+            const { default: handler } = await server.ssrLoadModule(`/${relPath}`);
             await handler(req, res);
           } catch (err) {
             console.error('[DEV API MIDDLEWARE ERROR]', err);

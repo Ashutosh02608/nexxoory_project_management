@@ -501,25 +501,18 @@ export default function AdminDashboardPage() {
                 <tr className="border-b border-[var(--border)] text-[var(--text-sec)] uppercase font-semibold text-[10px]">
                   <th className="pb-2.5">Project</th>
                   <th className="pb-2.5">Status</th>
-                  <th className="pb-2.5">Progress</th>
                   <th className="pb-2.5">Due Date</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border)]">
                 {filteredProjects.length === 0 ? (
                   <tr>
-                    <td colSpan="4" className="py-6 text-center text-[var(--text-sec)]">
+                    <td colSpan="3" className="py-6 text-center text-[var(--text-sec)]">
                       No projects available. Create your first project to begin tracking.
                     </td>
                   </tr>
                 ) : (
                   filteredProjects.slice(0, 5).map(p => {
-                    const pTasks = tasks.filter(t => t.projectId === p.id);
-                    const completedTasks = pTasks.filter(t => t.status === 'Completed').length;
-                    const calculatedProgress = pTasks.length > 0
-                      ? Math.round((completedTasks / pTasks.length) * 100)
-                      : Number(p.progress) || 0;
-
                     return (
                       <tr
                         key={p.id}
@@ -538,14 +531,6 @@ export default function AdminDashboardPage() {
                           }`}>
                             {p.status}
                           </span>
-                        </td>
-                        <td className="py-3 pr-4 w-36">
-                          <div className="flex items-center gap-2">
-                            <div className="w-full bg-[var(--border)] h-1.5 rounded-full overflow-hidden">
-                              <div className="bg-[#635BFF] h-full rounded-full" style={{ width: `${calculatedProgress}%` }} />
-                            </div>
-                            <span className="text-[10px] font-semibold text-[var(--text-sec)]">{calculatedProgress}%</span>
-                          </div>
                         </td>
                         <td className="py-3 text-[var(--text-sec)]">
                           {p.dueDate ? asDate(p.dueDate).toLocaleDateString() : 'N/A'}

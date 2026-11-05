@@ -312,7 +312,6 @@ export default function TeamMemberDashboard() {
               {myProjects.map(p => {
                 const pTasks = myTasks.filter(t => t.projectId === p.id);
                 const pDone = pTasks.filter(t => t.status === 'Completed').length;
-                const prog = pTasks.length > 0 ? Math.round((pDone / pTasks.length) * 100) : (p.progress || 0);
 
                 return (
                   <div
@@ -333,14 +332,9 @@ export default function TeamMemberDashboard() {
                       <p className="text-[10px] text-[var(--text-sec)] mt-1 line-clamp-1">{p.description || 'No description provided'}</p>
                     </div>
 
-                    <div className="mt-3">
-                      <div className="flex items-center justify-between text-[10px] font-bold text-[var(--text-sec)] mb-1">
-                        <span>Progress</span>
-                        <span>{prog}%</span>
-                      </div>
-                      <div className="h-1.5 bg-[var(--border)] rounded-full overflow-hidden">
-                        <div className="h-full bg-[#1E6091] rounded-full" style={{ width: `${prog}%` }} />
-                      </div>
+                    <div className="mt-3 flex items-center justify-between text-[10px] font-bold text-[var(--text-sec)]">
+                      <span>Tasks</span>
+                      <span className="text-[var(--text-main)]">{pDone} / {pTasks.length} Done</span>
                     </div>
                   </div>
                 );

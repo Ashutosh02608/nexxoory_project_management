@@ -5,6 +5,8 @@
  * - CSRF / Origin headers attached to state-changing requests.
  */
 
+import { editableContent } from '../utils/contentFields';
+
 let inMemoryAccessToken = null;
 let activeRefreshPromise = null;
 const activeDataRequests = new Map();
@@ -179,6 +181,7 @@ export const AuthAPI = {
 
 // Unified Data Gateway Helper
 async function dataRequest(entity, action, payload = {}) {
+  if (payload.content && ['projects', 'tasks'].includes(entity)) payload = { ...payload, content: editableContent(payload.content, entity === 'projects') };
   const requestPayload = action === 'create' && !payload.clientMutationId
     ? { ...payload, clientMutationId: crypto.randomUUID() }
     : payload;

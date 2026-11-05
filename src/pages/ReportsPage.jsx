@@ -541,14 +541,13 @@ export default function ReportsPage() {
                 <th className="pb-2">Status</th>
                 <th className="pb-2">Priority</th>
                 <th className="pb-2">Tasks (Done / Total)</th>
-                <th className="pb-2 w-36">Progress</th>
                 <th className="pb-2 text-right">Due Date</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
               {filteredProjects.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-6 text-center text-xs text-[var(--text-sec)]">
+                  <td colSpan={6} className="py-6 text-center text-xs text-[var(--text-sec)]">
                     No active projects found matching the selected filter criteria.
                   </td>
                 </tr>
@@ -583,19 +582,6 @@ export default function ReportsPage() {
                       <td className="py-3 font-medium text-[var(--text-main)]">{p.priority || 'Medium'}</td>
                       <td className="py-3 text-[var(--text-sec)]">
                         {doneTasks} / {pTasks.length}
-                      </td>
-                      <td className="py-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-full bg-[var(--border)] h-1.5 rounded-full overflow-hidden">
-                            <div
-                              className="bg-[#1E6091] h-full rounded-full transition-all"
-                              style={{ width: `${p.progress || 0}%` }}
-                            />
-                          </div>
-                          <span className="text-[10px] font-bold text-[var(--text-main)] w-7 text-right">
-                            {p.progress || 0}%
-                          </span>
-                        </div>
                       </td>
                       <td className="py-3 text-right font-medium text-[var(--text-sec)]">
                         {p.dueDate || 'No Date'}
@@ -693,8 +679,7 @@ export default function ReportsPage() {
                   <th className="pb-2">Total Tasks</th>
                   <th className="pb-2">Done</th>
                   <th className="pb-2">Pending</th>
-                  <th className="pb-2">Overdue</th>
-                  <th className="pb-2 text-right">Completion %</th>
+                  <th className="pb-2 text-right">Overdue</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border)]">
@@ -704,7 +689,7 @@ export default function ReportsPage() {
                     <td className="py-3 font-bold text-[var(--text-main)]">{tw.totalTasks}</td>
                     <td className="py-3 text-emerald-600 font-semibold">{tw.completed}</td>
                     <td className="py-3 text-[var(--text-sec)] font-semibold">{tw.pending}</td>
-                    <td className="py-3">
+                    <td className="py-3 text-right">
                       {tw.overdue > 0 ? (
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/10 text-red-600">
                           {tw.overdue}
@@ -712,17 +697,6 @@ export default function ReportsPage() {
                       ) : (
                         <span className="text-[10px] text-[var(--text-sec)]">0</span>
                       )}
-                    </td>
-                    <td className="py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <div className="w-16 bg-[var(--border)] h-1.5 rounded-full overflow-hidden">
-                          <div
-                            className="bg-[#10B981] h-full rounded-full"
-                            style={{ width: `${tw.pct}%` }}
-                          />
-                        </div>
-                        <span className="font-bold text-[var(--text-main)] text-[10px] w-6">{tw.pct}%</span>
-                      </div>
                     </td>
                   </tr>
                 ))}

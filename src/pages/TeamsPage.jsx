@@ -172,7 +172,7 @@ export default function TeamsPage() {
                       {getInitials(leader.name)}
                     </div>
                     <div className="overflow-hidden text-xs">
-                      <span className="text-[10px] text-[var(--text-sec)] block leading-none">Team Leader</span>
+                      <span className="text-[10px] text-[var(--text-sec)] block leading-none">Project Manager</span>
                       <span className="font-semibold text-[var(--text-main)] truncate">{leader.name}</span>
                     </div>
                   </div>
@@ -345,7 +345,7 @@ export default function TeamsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Team Leader</label>
+                  <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Project Manager</label>
                   <select
                     value={formData.leaderId}
                     onChange={(e) => setFormData({ ...formData, leaderId: e.target.value })}

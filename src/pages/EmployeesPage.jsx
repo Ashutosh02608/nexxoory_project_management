@@ -500,7 +500,7 @@ export default function EmployeesPage() {
                       ⚠️ Teams Requiring Leader Reassignment ({deleteSummary.ledTeams.length})
                     </label>
                     <p className="text-[11px] text-[var(--text-sec)]">
-                      Assign an eligible replacement Team Leader:
+                      Assign an eligible replacement Project Manager:
                     </p>
                     {deleteSummary.ledTeams.map(t => (
                       <div key={t.id} className="flex items-center justify-between gap-2 py-1">
@@ -511,7 +511,7 @@ export default function EmployeesPage() {
                           onChange={e => setTeamReassignments({ ...teamReassignments, [t.id]: e.target.value })}
                           className="px-2 py-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-main)] outline-none"
                         >
-                          <option value="">Select New Team Leader...</option>
+                          <option value="">Select New Project Manager...</option>
                           {users
                             .filter(u => u.id !== deleteTarget.id && u.status !== 'Inactive' && u.name !== 'Deleted Employee')
                             .map(u => (

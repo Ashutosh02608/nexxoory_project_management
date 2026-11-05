@@ -134,6 +134,7 @@ EXCEPTION
 END $$;
 
 CREATE TABLE IF NOT EXISTS projects (
+    content JSONB NOT NULL DEFAULT '{}'::jsonb,
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(200) NOT NULL,
     description TEXT,
@@ -184,6 +185,7 @@ EXCEPTION
 END $$;
 
 CREATE TABLE IF NOT EXISTS tasks (
+    content JSONB NOT NULL DEFAULT '{}'::jsonb,
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     title VARCHAR(255) NOT NULL,
     description TEXT,
@@ -209,6 +211,15 @@ CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_kanban ON tasks(project_id, status, kanban_order);
 
 -- Subtasks Checklist
+CREATE TABLE IF NOT EXISTS content_workflow_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    actor_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    changes JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_content_history_task ON content_workflow_history(task_id, created_at);
+
 CREATE TABLE IF NOT EXISTS subtasks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,

@@ -2,6 +2,8 @@ import { authenticateRequest } from '../../server/middleware/auth.js';
 import { handleCors, validateCsrf, sendSuccess, sendError } from '../../server/utils/response.js';
 import { query, transaction } from '../../server/config/db.js';
 import argon2 from 'argon2';
+import { saveContent, validateContent, ContentWorkflowError } from '../../server/utils/contentWorkflow.js';
+import { getTaskTypesForProjectType, getAllowedDeliveryCategories } from '../../shared/serviceTypes.js';
 
 const isUuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
 
@@ -62,6 +64,7 @@ export default async function handler(req, res) {
         return sendError(res, 400, 'UNKNOWN_ENTITY', `Entity "${entity}" is not recognized`);
     }
   } catch (err) {
+    if (err instanceof ContentWorkflowError) return sendError(res, 400, 'CONTENT_WORKFLOW_ERROR', err.message);
     console.error('[UNIFIED API ERROR]', err.name, err.code);
     return sendError(res, 500, 'SERVER_ERROR', 'The operation could not be completed');
   }
@@ -169,6 +172,7 @@ async function handleBootstrap(authUser, res) {
           SELECT json_build_object(
             'id', p.id,
             'name', p.name,
+            'content', CASE WHEN $2 = 'team_member' THEN p.content - 'internalNotes' ELSE p.content END,
             'description', p.description,
             'managerId', p.manager_id,
             'teamId', p.primary_team_id,
@@ -193,6 +197,7 @@ async function handleBootstrap(authUser, res) {
           SELECT json_build_object(
             'id', t.id,
             'title', t.title,
+            'content', t.content,
             'description', t.description,
             'projectId', t.project_id,
             'assigneeId', t.assignee_id,
@@ -616,6 +621,7 @@ async function handleTeams(action, payload, authUser, res) {
 // PROJECTS HANDLER
 // -------------------------------------------------------------
 async function handleProjects(action, payload, authUser, res) {
+  if (payload.content) { try { validateContent(payload.content, true); } catch (error) { return sendError(res, 400, 'VALIDATION_ERROR', error.message); } }
   if (action === 'list') {
     const result = await query(`
       SELECT p.* FROM projects p
@@ -625,7 +631,8 @@ async function handleProjects(action, payload, authUser, res) {
     const projects = result.rows.map(r => ({
       id: r.id, name: r.name, description: r.description, managerId: r.manager_id, teamId: r.primary_team_id,
       priority: r.priority, status: r.status, startDate: r.start_date, dueDate: r.due_date,
-      progress: r.progress, budget: Number(r.budget), spent: Number(r.spent), tags: r.tags || []
+      progress: r.progress, budget: Number(r.budget), spent: Number(r.spent), tags: r.tags || [],
+      content: authUser.role === 'team_member' ? Object.fromEntries(Object.entries(r.content || {}).filter(([key]) => key !== 'internalNotes')) : r.content || {}
     }));
     return sendSuccess(res, { projects }, 'Projects retrieved');
   }
@@ -651,6 +658,7 @@ async function handleProjects(action, payload, authUser, res) {
       startDate || new Date().toISOString().split('T')[0], dueDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
       progress || 0, budget || 0, tags || [], clientMutationId]);
       const wasInserted = Boolean(result.rows[0]);
+      if (wasInserted) await saveContent(client, 'projects', clientMutationId, payload.content, authUser, projectScope('t', '$2', '$3'));
       const existing = wasInserted ? result : await client.query(`
         SELECT p.* FROM projects p WHERE p.id = $1 AND ${projectScope('p', '$2', '$3')}
       `, [clientMutationId, authUser.id, authUser.role]);
@@ -728,6 +736,8 @@ async function handleProjects(action, payload, authUser, res) {
       Object.hasOwn(payload, 'managerId'), Object.hasOwn(payload, 'teamId')]);
       if (!result.rows.length) return null;
 
+      await saveContent(client, 'projects', id, payload.content, authUser, projectScope('t', '$2', '$3'));
+
       // Resynchronize project group conversation & membership
       const existingRoom = await client.query("SELECT id FROM conversations WHERE type = 'project' AND project_id = $1 LIMIT 1;", [id]);
       let conversationId = existingRoom.rows[0]?.id;
@@ -779,6 +789,7 @@ async function handleProjects(action, payload, authUser, res) {
 // TASKS HANDLER
 // -------------------------------------------------------------
 async function handleTasks(action, payload, authUser, res) {
+  if (payload.content) { try { validateContent(payload.content); } catch (error) { return sendError(res, 400, 'VALIDATION_ERROR', error.message); } }
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return sendError(res, 400, 'VALIDATION_ERROR', 'Task payload must be an object');
   }
@@ -813,7 +824,7 @@ async function handleTasks(action, payload, authUser, res) {
     const tasks = result.rows.map(r => ({
       id: r.id, title: r.title, description: r.description, projectId: r.project_id, assigneeId: r.assignee_id,
       teamId: r.team_id, priority: r.priority, status: r.status, startDate: r.start_date, dueDate: r.due_date,
-      progress: r.progress, labels: r.labels || [], subtasks: r.subtasks || [], comments: r.comments || []
+      progress: r.progress, labels: r.labels || [], subtasks: r.subtasks || [], comments: r.comments || [], content: r.content || {}
     }));
     return sendSuccess(res, { tasks }, 'Tasks retrieved');
   }
@@ -824,6 +835,27 @@ async function handleTasks(action, payload, authUser, res) {
     }
     const { title, description, projectId, assigneeId, teamId, priority, status, startDate, dueDate, progress, labels, clientMutationId } = payload;
     if (!isUuid(clientMutationId)) return sendError(res, 400, 'VALIDATION_ERROR', 'A valid mutation ID is required');
+
+    // Validate Task Type and Delivery Category against Project Type and Delivery Schedule if projectId is provided
+    if (projectId) {
+      const projCheck = await query(`SELECT content FROM projects WHERE id = $1`, [projectId]);
+      const pRow = projCheck.rows[0];
+      if (pRow) {
+        if (payload.content?.contentType) {
+          const allowedTaskTypes = getTaskTypesForProjectType(pRow.content?.projectType);
+          if (!allowedTaskTypes.includes(payload.content.contentType)) {
+            return sendError(res, 400, 'VALIDATION_ERROR', `Task type "${payload.content.contentType}" is not valid for project type "${pRow.content?.projectType || 'Other'}"`);
+          }
+        }
+        if (payload.content?.deliveryCategory) {
+          const allowedCategories = getAllowedDeliveryCategories(pRow.content?.deliverySchedule);
+          if (!allowedCategories.includes(payload.content.deliveryCategory)) {
+            return sendError(res, 400, 'VALIDATION_ERROR', `Delivery category "${payload.content.deliveryCategory}" is not allowed for project schedule "${pRow.content?.deliverySchedule || 'Monthly Deliverables'}"`);
+          }
+        }
+      }
+    }
+
     const task = await transaction(async client => {
       const result = await client.query(`
       INSERT INTO tasks (id, title, description, project_id, assignee_id, team_id, priority, status, start_date, due_date, progress, labels)
@@ -849,6 +881,7 @@ async function handleTasks(action, payload, authUser, res) {
       `, [clientMutationId, authUser.id, authUser.role]);
       const r = existing.rows[0];
       if (!r) return null;
+      if (wasInserted) await saveContent(client, 'tasks', r.id, payload.content, authUser, taskScope('$2', '$3', true));
 
       const normalizedTask = {
         id: r.id,
@@ -883,7 +916,19 @@ async function handleTasks(action, payload, authUser, res) {
 
   if (action === 'update') {
     const { id, title, description, projectId, assigneeId, teamId, priority, status, dueDate, progress, labels, comments } = payload;
+    if (authUser.role === 'team_member') {
+      const current = await query(`SELECT t.* FROM tasks t WHERE t.id = $1 AND t.assignee_id = $2`, [id, authUser.id]);
+      const row = current.rows[0];
+      if (!row) return sendError(res, 403, 'FORBIDDEN', 'Only your assigned tasks can be updated');
+      const protectedFields = { title: 'title', description: 'description', projectId: 'project_id', assigneeId: 'assignee_id', teamId: 'team_id', priority: 'priority', dueDate: 'due_date', labels: 'labels' };
+      for (const [key, column] of Object.entries(protectedFields)) {
+        const stored = key === 'dueDate' && row[column] ? new Date(row[column]).toISOString().slice(0, 10) : row[column];
+        const proposed = key === 'dueDate' && payload[key] ? String(payload[key]).slice(0, 10) : payload[key];
+        if (Object.hasOwn(payload, key) && JSON.stringify(proposed ?? null) !== JSON.stringify(stored ?? null)) return sendError(res, 403, 'FORBIDDEN', `You cannot change ${key}`);
+      }
+    }
     const updated = await transaction(async client => {
+      await saveContent(client, 'tasks', id, payload.content, authUser, taskScope('$2', '$3', true), Object.fromEntries(['title', 'description', 'assigneeId'].filter(key => Object.hasOwn(payload, key)).map(key => [key, payload[key]])));
       const result = await client.query(`
       UPDATE tasks t SET title = COALESCE($2, title), description = COALESCE($3, description), project_id = CASE WHEN $12 THEN $4 ELSE project_id END,
       assignee_id = CASE WHEN $13 THEN $5 ELSE assignee_id END,
@@ -915,7 +960,7 @@ async function handleTasks(action, payload, authUser, res) {
   }
 
   if (action === 'delete') {
-    if (!['admin', 'project_manager'].includes(authUser.role)) {
+    if (authUser.role !== 'admin') {
       return sendError(res, 403, 'FORBIDDEN', 'You cannot delete tasks');
     }
     const result = await query(

@@ -15,12 +15,12 @@
     "migration:status": "node scripts/migration-status.js",
     "test:security": "node scripts/test-api-security.js",
     "test:api:readonly": "node scripts/test-api-readonly.js",
-    "check": "npm run lint && npm run build && npm run test:security"
+    "test:content": "node scripts/test-content-workflow.js",
+    "check": "npm run lint && npm run build && npm run test:security && npm run test:content"
   },
   "dependencies": {
     "argon2": "^0.45.2",
     "autoprefixer": "^10.6.2",
-    "clsx": "^2.1.1",
     "cookie": "^2.0.1",
     "dotenv": "^18.0.9",
     "jsonwebtoken": "^9.0.3",
