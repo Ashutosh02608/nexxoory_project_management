@@ -587,16 +587,18 @@ export default function TasksPage() {
       </div>
 
       {/* Views */}
-      <ContentSchedule
-        searchTerm={debouncedSearch}
-        hideSearch
-        hideToolbar
-        externalMonth="ALL"
-        externalFilters={{ projectFilter, statusFilter, priorityFilter, ...advancedFilters }}
-        onAdvancedFilterChange={(newFilters) => setAdvancedFilters(prev => ({ ...prev, ...newFilters }))}
-        externalEditing={sharedDetailsTask}
-        onCloseExternalEditing={() => setSharedDetailsTask(null)}
-      />
+      {viewMode === 'content' && (
+        <ContentSchedule
+          searchTerm={debouncedSearch}
+          hideSearch
+          hideToolbar
+          externalMonth="ALL"
+          externalFilters={{ projectFilter, statusFilter, priorityFilter, ...advancedFilters }}
+          onAdvancedFilterChange={(newFilters) => setAdvancedFilters(prev => ({ ...prev, ...newFilters }))}
+          externalEditing={sharedDetailsTask}
+          onCloseExternalEditing={() => setSharedDetailsTask(null)}
+        />
+      )}
 
       {viewMode === 'kanban' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4 select-none pb-4">

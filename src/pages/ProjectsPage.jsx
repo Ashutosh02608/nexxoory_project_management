@@ -562,7 +562,7 @@ export default function ProjectsPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Status</label>
                   <select
@@ -589,17 +589,6 @@ export default function ProjectsPage() {
                     <option value="High">High</option>
                     <option value="Urgent">Urgent</option>
                   </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Progress %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={formData.progress}
-                    onChange={(e) => setFormData({ ...formData, progress: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-main)] text-[var(--text-main)] outline-none"
-                  />
                 </div>
               </div>
 
@@ -676,7 +665,7 @@ export default function ProjectsPage() {
                   <p className="text-xs text-[var(--text-main)] mt-1">{detailsProject.description}</p>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 py-3 border-y border-[var(--border)] text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-3 border-y border-[var(--border)] text-xs">
                   <div>
                     <span className="text-[var(--text-sec)] block text-[10px]">Project Type</span>
                     <span className="font-semibold text-[#635BFF]">{detailsProject.content?.projectType || 'Other'}</span>
@@ -692,10 +681,6 @@ export default function ProjectsPage() {
                   <div>
                     <span className="text-[var(--text-sec)] block text-[10px]">Priority</span>
                     <span className="font-semibold text-[var(--text-main)]">{detailsProject.priority}</span>
-                  </div>
-                  <div>
-                    <span className="text-[var(--text-sec)] block text-[10px]">Overall Progress</span>
-                    <span className="font-semibold text-[#635BFF]">{detailsProject.progress}%</span>
                   </div>
                 </div>
 
