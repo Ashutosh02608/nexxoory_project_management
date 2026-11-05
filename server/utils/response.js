@@ -5,9 +5,16 @@ function isAllowedOrigin(origin) {
   if (!origin) return true;
   try {
     const parsed = new URL(origin);
-    return [env.FRONTEND_URL, ...env.ALLOWED_ORIGINS].some((allowed) => {
-      const allowedUrl = new URL(allowed);
-      return parsed.origin === allowedUrl.origin;
+    const deploymentOrigins = process.env.VERCEL === '1'
+      ? [process.env.VERCEL_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]
+        .filter(Boolean).map((host) => `https://${host}`)
+      : [];
+    return [env.FRONTEND_URL, ...env.ALLOWED_ORIGINS, ...deploymentOrigins].some((allowed) => {
+      try {
+        return parsed.origin === new URL(allowed).origin;
+      } catch {
+        return false;
+      }
     });
   } catch {
     return false;
@@ -45,8 +52,7 @@ export function sendError(res, statusCode, code, message, details = undefined) {
 export function handleCors(req, res) {
   const origin = req.headers.origin;
   
-  // Whitelist resolution:
-  // Allow same-origin, Vercel deployments (*.vercel.app), localhost, or configured FRONTEND_URL/ALLOWED_ORIGINS
+  // Allow exact configured origins and this project's platform-provided deployment URLs.
   const allowedOrigin = isAllowedOrigin(origin);
 
   // Reject unauthorized origins for state-changing requests

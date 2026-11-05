@@ -47,6 +47,20 @@ async function request(entity, action, payload = {}, overrides = {}) {
 const badOrigin = await request('projects', 'list', {}, { origin: 'https://localhost.attacker.example' });
 assert.equal(badOrigin.statusCode, 403);
 assert.equal(badOrigin.body.error.code, 'FORBIDDEN_ORIGIN');
+const originalDeploymentEnv = [process.env.VERCEL, process.env.VERCEL_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL];
+process.env.VERCEL = '1';
+process.env.VERCEL_URL = 'this-project-preview.vercel.app';
+process.env.VERCEL_PROJECT_PRODUCTION_URL = 'this-project.vercel.app';
+for (const origin of ['https://this-project-preview.vercel.app', 'https://this-project.vercel.app']) {
+  assert.equal((await request('projects', 'list', {}, { origin })).statusCode, 200);
+}
+for (const origin of ['https://another-project.vercel.app', 'https://this-project.vercel.app.attacker.example']) {
+  assert.equal((await request('projects', 'list', {}, { origin })).statusCode, 403);
+}
+['VERCEL', 'VERCEL_URL', 'VERCEL_PROJECT_PRODUCTION_URL'].forEach((key, index) => {
+  if (originalDeploymentEnv[index] === undefined) delete process.env[key];
+  else process.env[key] = originalDeploymentEnv[index];
+});
 
 const missingCsrf = await request('projects', 'list', {}, { 'x-requested-with': '' });
 assert.equal(missingCsrf.statusCode, 403);
