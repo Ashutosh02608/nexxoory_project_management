@@ -36,7 +36,7 @@ export function verifyAccessToken(token) {
       audience: JWT_AUDIENCE,
       algorithms: ['HS256'],
     });
-  } catch (err) {
+  } catch  {
     return null;
   }
 }

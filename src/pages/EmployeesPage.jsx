@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { UserCircle2, Plus, Search, Edit2, Trash2, Mail, Briefcase, Building, X, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { Plus, Search, Edit2, Trash2, Mail, Briefcase, Building, X, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react';
+import { useApp } from '../context/useApp';
 import { UsersAPI } from '../services/api';
 import { getInitials } from '../utils/avatar';
 import { DEPARTMENTS, DEFAULT_DEPARTMENT } from '../constants/departments';
 
 export default function EmployeesPage() {
-  const { users, updateUser, removeUser, tasks, projects, permissions } = useApp();
+  const { users, updateUser, removeUser, tasks, permissions } = useApp();
 
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');

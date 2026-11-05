@@ -1,20 +1,19 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Download,
   Filter,
   X,
-  AlertTriangle,
   Clock,
   CheckCircle2,
   ListTodo,
   FolderKanban,
   Users2,
-  Calendar,
   ArrowUpRight
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import { ScopeRules } from '../config/rbac';
+import { asDate, timestampNow } from '../utils/dateHelpers';
 import {
   ResponsiveContainer,
   PieChart,
@@ -60,11 +59,11 @@ export default function ReportsPage() {
   };
 
   // Helper date checker
-  const isWithinDateRange = (dateStr) => {
+  const isWithinDateRange = useCallback((dateStr) => {
     if (!dateStr || dateRange === 'ALL') return true;
-    const itemDate = new Date(dateStr);
+    const itemDate = asDate(dateStr);
     if (isNaN(itemDate.getTime())) return true;
-    const now = new Date();
+    const now = asDate();
     const diffDays = Math.ceil((itemDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 
     if (dateRange === '7_DAYS') return diffDays >= -7 && diffDays <= 7;
@@ -73,7 +72,7 @@ export default function ReportsPage() {
       return itemDate.getMonth() === now.getMonth() && itemDate.getFullYear() === now.getFullYear();
     }
     return true;
-  };
+  }, [dateRange]);
 
   // Filtered Datasets
   const filteredProjects = useMemo(() => {
@@ -84,7 +83,7 @@ export default function ReportsPage() {
       if (!isWithinDateRange(p.dueDate)) return false;
       return true;
     });
-  }, [scopedProjects, projectFilter, teamFilter, projectStatusFilter, dateRange]);
+  }, [scopedProjects, projectFilter, teamFilter, projectStatusFilter, isWithinDateRange]);
 
   const filteredTasks = useMemo(() => {
     return scopedTasks.filter(t => {
@@ -94,7 +93,7 @@ export default function ReportsPage() {
       if (!isWithinDateRange(t.dueDate)) return false;
       return true;
     });
-  }, [scopedTasks, projectFilter, teamFilter, taskStatusFilter, dateRange]);
+  }, [scopedTasks, projectFilter, teamFilter, taskStatusFilter, isWithinDateRange]);
 
   // Project Status Overview Calculation
   const projectStatusData = useMemo(() => {
@@ -119,7 +118,7 @@ export default function ReportsPage() {
 
   // Task Completion Overview Calculation
   const taskStatusData = useMemo(() => {
-    const now = new Date();
+    const now = asDate();
     let todo = 0, inProg = 0, inReview = 0, completed = 0, overdue = 0;
 
     filteredTasks.forEach(t => {
@@ -128,7 +127,7 @@ export default function ReportsPage() {
         completed++;
         return;
       }
-      const isOverdue = t.dueDate && new Date(t.dueDate) < now;
+      const isOverdue = t.dueDate && asDate(t.dueDate) < now;
       if (isOverdue) {
         overdue++;
         return;
@@ -150,14 +149,14 @@ export default function ReportsPage() {
 
   // Upcoming Deadlines Calculation (Projects & Tasks)
   const upcomingDeadlines = useMemo(() => {
-    const now = new Date();
-    const sevenDaysLater = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const now = asDate();
+    const sevenDaysLater = asDate(timestampNow() + 7 * 24 * 60 * 60 * 1000);
     const items = [];
 
     // Projects
     filteredProjects.forEach(p => {
       if (!p.dueDate || p.status === 'Completed') return;
-      const d = new Date(p.dueDate);
+      const d = asDate(p.dueDate);
       const isOverdue = d < now;
       const isSoon = d >= now && d <= sevenDaysLater;
       if (isOverdue || isSoon) {
@@ -179,7 +178,7 @@ export default function ReportsPage() {
     // Tasks
     filteredTasks.forEach(t => {
       if (!t.dueDate || t.status === 'Completed' || t.status === 'Done') return;
-      const d = new Date(t.dueDate);
+      const d = asDate(t.dueDate);
       const isOverdue = d < now;
       const isSoon = d >= now && d <= sevenDaysLater;
       if (isOverdue || isSoon) {
@@ -199,16 +198,16 @@ export default function ReportsPage() {
       }
     });
 
-    return items.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()).slice(0, 10);
+    return items.sort((a, b) => asDate(a.dueDate).getTime() - asDate(b.dueDate).getTime()).slice(0, 10);
   }, [filteredProjects, filteredTasks, users, projects]);
 
   // Team Workload Calculation
   const teamWorkload = useMemo(() => {
-    const now = new Date();
+    const now = asDate();
     return teams.map(team => {
       const teamTasks = scopedTasks.filter(t => t.teamId === team.id);
       const completed = teamTasks.filter(t => t.status === 'Completed' || t.status === 'Done').length;
-      const overdue = teamTasks.filter(t => t.dueDate && new Date(t.dueDate) < now && t.status !== 'Completed' && t.status !== 'Done').length;
+      const overdue = teamTasks.filter(t => t.dueDate && asDate(t.dueDate) < now && t.status !== 'Completed' && t.status !== 'Done').length;
       const pending = teamTasks.length - completed;
       const pct = teamTasks.length > 0 ? Math.round((completed / teamTasks.length) * 100) : 0;
 
@@ -271,7 +270,7 @@ export default function ReportsPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `nexxoory_report_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `nexxoory_report_${asDate().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

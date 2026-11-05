@@ -1,19 +1,20 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
-  MessageSquare, Send, Paperclip, Smile, MoreVertical, Hash, User,
-  Search, Bell, BellOff, Pin, PinOff, Trash2, Edit3, Reply,
-  Users, ChevronRight, X, Check, CheckCheck, Megaphone, FolderOpen,
-  Building2, AtSign, Inbox, ArrowLeft, ArrowRight, Info, ChevronDown, Plus, Copy
+  MessageSquare, Send, Smile, Search, Bell, BellOff, Pin, PinOff, Edit3, Reply,
+  X, Check, CheckCheck, Megaphone, FolderOpen,
+  Building2, AtSign, Inbox, ArrowLeft, ArrowRight, Info, Plus, Copy
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
-import { useMessaging } from '../context/MessagingContext';
+import { useApp } from '../context/useApp';
+import { useMessaging } from '../context/useMessaging';
 import { getInitials } from '../utils/avatar';
-import { format, isToday, isYesterday } from '../utils/dateHelpers';
+import { asDate, isToday, isYesterday, timestampNow } from '../utils/dateHelpers';
+
+const EMPTY_MESSAGES = [];
 
 // ─── Utility ───────────────────────────────────────────────────────────────
 function fmtTime(ts) {
   if (!ts) return '';
-  const d = new Date(ts);
+  const d = asDate(ts);
   if (isNaN(d)) return '';
   if (isToday(d)) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   if (isYesterday(d)) return 'Yesterday';
@@ -22,7 +23,7 @@ function fmtTime(ts) {
 
 function fmtFull(ts) {
   if (!ts) return '';
-  const d = new Date(ts);
+  const d = asDate(ts);
   return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
@@ -226,7 +227,6 @@ function ConversationList({ section, convList, activeConvId, onSelect, search, o
 
 // ─── Message Bubble ────────────────────────────────────────────────────────
 function MessageBubble({ msg, isMine, isEditable, users, currentUser, onReply, onEdit, onReact, messages }) {
-  const [showMenu, setShowMenu] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(msg.text);
@@ -237,7 +237,7 @@ function MessageBubble({ msg, isMine, isEditable, users, currentUser, onReply, o
   const replySender = replyMsg ? users.find(u => u.id === replyMsg.senderId) : null;
 
   useEffect(() => {
-    function outside(e) { if (menuRef.current && !menuRef.current.contains(e.target)) { setShowMenu(false); setShowEmoji(false); } }
+    function outside(e) { if (menuRef.current && !menuRef.current.contains(e.target)) setShowEmoji(false); }
     document.addEventListener('mousedown', outside);
     return () => document.removeEventListener('mousedown', outside);
   }, []);
@@ -507,10 +507,10 @@ function ConvInfoPanel({ conv, users, currentUser, onClose, onPin, onMute, pinne
 // ─── Main Chat Panel ────────────────────────────────────────────────────────
 function ChatPanel({ convId: activeConvId, conversations, messages: allMessages, users, currentUser, permissions,
   sendMessage, editMessage, addReaction, markRead, publishAnnouncement,
-  pinConversation, muteConversation, getUserSetting, getUnreadCount }) {
+  pinConversation, muteConversation, getUserSetting }) {
 
   const conv = conversations[activeConvId];
-  const messages = allMessages[activeConvId] || [];
+  const messages = allMessages[activeConvId] || EMPTY_MESSAGES;
   const [input, setInput] = useState('');
   const [replyTo, setReplyTo] = useState(null);
   const [showInfo, setShowInfo] = useState(false);
@@ -593,7 +593,7 @@ function ChatPanel({ convId: activeConvId, conversations, messages: allMessages,
       }
     }
     return null;
-  }, [messages, currentUser?.id]);
+  }, [messages, currentUser]);
 
   if (!conv) {
     return (
@@ -688,7 +688,7 @@ function ChatPanel({ convId: activeConvId, conversations, messages: allMessages,
           {visibleMessages.map((msg) => {
             const isMine = msg.senderId === currentUser?.id;
             const isLatest = msg.id === latestMyMessageId;
-            const ageMs = Date.now() - new Date(msg.timestamp).getTime();
+            const ageMs = timestampNow() - asDate(msg.timestamp).getTime();
             const isWithin10Min = ageMs <= 10 * 60 * 1000;
             const isEditable = isMine && isLatest && isWithin10Min && !msg.isAnnouncement && !msg.deleted;
 
@@ -800,12 +800,12 @@ export default function MessagesPage() {
 
   const convList = useMemo(() =>
     getConversationsForUser(currentUser?.id, currentUser?.role),
-    [conversations, currentUser, getConversationsForUser]
+    [currentUser, getConversationsForUser]
   );
 
   const totalUnread = useMemo(() =>
     convList.reduce((sum, c) => sum + getUnreadCount(c.id, currentUser?.id), 0),
-    [convList, currentUser, getUnreadCount, messages]
+    [convList, currentUser, getUnreadCount]
   );
 
   const handleSelectConv = (id) => {

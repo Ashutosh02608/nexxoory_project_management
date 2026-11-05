@@ -2,16 +2,9 @@ import { verifyAccessToken } from '../utils/jwt.js';
 import { query } from '../config/db.js';
 import { sendError } from '../utils/response.js';
 
-// In-memory cache for validated user auth records to prevent redundant DB roundtrips (TTL: 60s)
-const userCache = new Map();
-
-export function invalidateUserCache(userId) {
-  if (userId) userCache.delete(userId);
-}
-
 /**
  * Extracts Bearer token from Authorization header, validates JWT,
- * and fetches the authoritative user record from PostgreSQL (or memory cache).
+ * and fetches the authoritative user record from PostgreSQL.
  * Verifies account is active and not suspended.
  */
 export async function authenticateRequest(req, res) {
@@ -31,16 +24,6 @@ export async function authenticateRequest(req, res) {
   }
 
   try {
-    const cached = userCache.get(decoded.sub);
-    if (cached && Date.now() - cached.timestamp < 60000) {
-      if (cached.user.status !== 'Active') {
-        sendError(res, 403, 'ACCOUNT_INACTIVE', `Account access is disabled (Status: ${cached.user.status})`);
-        return null;
-      }
-      return cached.user;
-    }
-
-    // Authoritative lookup from PostgreSQL to prevent stale roles or deactivated logins
     const result = await query(
       `SELECT id, name, email, role, designation, department, status, avatar_url 
        FROM users 
@@ -54,7 +37,6 @@ export async function authenticateRequest(req, res) {
     }
 
     const user = result.rows[0];
-    userCache.set(decoded.sub, { user, timestamp: Date.now() });
 
     if (user.status !== 'Active') {
       sendError(

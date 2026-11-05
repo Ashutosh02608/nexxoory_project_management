@@ -5,8 +5,8 @@ import {
   ChevronRight,
   X,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
-import { useMessaging } from '../context/MessagingContext';
+import { useApp } from '../context/useApp';
+import { useMessaging } from '../context/useMessaging';
 import { getRoleNavigation } from '../config/rbac';
 import logoImg from '../assets/nexxoory_logo.webp';
 
@@ -20,7 +20,7 @@ export default function SidebarNavigation({ isMobileDrawer = false, onCloseMobil
   const notifUnread = useMemo(() => {
     if (!currentUser) return 0;
     return notifications.filter(n => (!n.userId || n.userId === currentUser.id) && !n.read).length;
-  }, [notifications, currentUser?.id]);
+  }, [notifications, currentUser]);
 
   const msgUnread = useMemo(() => {
     if (!messaging || !currentUser) return 0;

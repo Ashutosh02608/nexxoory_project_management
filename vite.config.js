@@ -51,7 +51,7 @@ export default defineConfig({
               if (bodyStr) {
                 try {
                   req.body = JSON.parse(bodyStr);
-                } catch (e) {
+                } catch  {
                   req.body = {};
                 }
               } else {

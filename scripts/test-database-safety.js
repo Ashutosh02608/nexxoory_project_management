@@ -25,7 +25,7 @@
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { getDbPool, query, transaction, closePool, getSslConfig } from '../server/config/db.js';
+import { query, transaction, closePool, getSslConfig } from '../server/config/db.js';
 import { seedDatabase, toDeterministicUuid } from './seed.js';
 
 dotenv.config();
@@ -132,7 +132,7 @@ export async function runSafetyTestSuite() {
     const countsRun1 = await countQuery();
 
     // 2. Repeated seed execution
-    const seedRes2 = await seedDatabase();
+    await seedDatabase();
     const countsRun2 = await countQuery();
 
     const isDuplicate = JSON.stringify(countsRun1) !== JSON.stringify(countsRun2);
@@ -281,7 +281,7 @@ export async function runSafetyTestSuite() {
         ]);
         throw new Error('Simulated transactional failure');
       });
-    } catch (e) {
+    } catch  {
       // Expected rollback
     }
     const postFailCounts = await countQuery();

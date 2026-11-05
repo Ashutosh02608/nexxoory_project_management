@@ -21,7 +21,7 @@ import {
   FileCheck,
   AlertCircle
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import { getDocumentFile, fileToBase64 } from '../services/documentStorage';
 
 export default function DocumentsPage() {

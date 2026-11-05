@@ -48,7 +48,7 @@ export default async function handler(req, res) {
       'If an active account exists for that email, password recovery instructions have been initiated.'
     );
   } catch (err) {
-    console.error('[FORGOT PASSWORD API ERROR]', err);
+    console.error('[FORGOT PASSWORD API ERROR]', err.name, err.code);
     return sendError(res, 500, 'SERVER_ERROR', 'Failed to process password recovery request');
   }
 }

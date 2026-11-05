@@ -15,10 +15,18 @@ export function isYesterday(date) {
     d.getDate() === yesterday.getDate();
 }
 
-export function format(date, pattern) {
+export function format(date) {
   if (!date) return '';
   const d = new Date(date);
   if (isNaN(d)) return '';
   return d.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+export function asDate(...args) {
+  return args.length ? new Date(...args) : new Date();
+}
+
+export function timestampNow() {
+  return Date.now();
 }
 

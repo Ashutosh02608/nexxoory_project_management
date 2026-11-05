@@ -1,4 +1,4 @@
-import React from 'react';
+import { lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppProvider } from './context/AppContext';
 import { MessagingProvider } from './context/MessagingContext';
@@ -10,20 +10,20 @@ import ProtectedRoute from './components/ProtectedRoute';
 import { ROUTE_PERMISSIONS } from './config/rbac';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
-// Pages
-import DashboardDispatcher from './pages/DashboardDispatcher';
-import ProjectsPage from './pages/ProjectsPage';
-import TasksPage from './pages/TasksPage';
-import TeamsPage from './pages/TeamsPage';
-import EmployeesPage from './pages/EmployeesPage';
-import MyWorkPage from './pages/MyWorkPage';
-import CalendarPage from './pages/CalendarPage';
-import DocumentsPage from './pages/DocumentsPage';
-import MessagesPage from './pages/MessagesPage';
-import ReportsPage from './pages/ReportsPage';
-import NotificationsPage from './pages/NotificationsPage';
-import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
+
+// Protected pages
+const DashboardDispatcher = lazy(() => import('./pages/DashboardDispatcher'));
+const ProjectsPage = lazy(() => import('./pages/ProjectsPage'));
+const TasksPage = lazy(() => import('./pages/TasksPage'));
+const TeamsPage = lazy(() => import('./pages/TeamsPage'));
+const EmployeesPage = lazy(() => import('./pages/EmployeesPage'));
+const CalendarPage = lazy(() => import('./pages/CalendarPage'));
+const DocumentsPage = lazy(() => import('./pages/DocumentsPage'));
+const MessagesPage = lazy(() => import('./pages/MessagesPage'));
+const ReportsPage = lazy(() => import('./pages/ReportsPage'));
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 
 export default function App() {
   return (
@@ -39,7 +39,7 @@ export default function App() {
             <Route element={<ProtectedRoute />}>
               <Route path="/" element={<DashboardLayout />}>
                 <Route index element={<DashboardDispatcher />} />
-                <Route path="my-work" element={<ProtectedRoute allowedRoles={ROUTE_PERMISSIONS['/my-work']}><MyWorkPage /></ProtectedRoute>} />
+                <Route path="my-work" element={<Navigate to="/tasks" replace />} />
                 <Route path="projects" element={<ProjectsPage />} />
                 <Route path="tasks" element={<TasksPage />} />
                 <Route path="teams" element={<ProtectedRoute allowedRoles={ROUTE_PERMISSIONS['/teams']}><TeamsPage /></ProtectedRoute>} />

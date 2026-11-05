@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Users2, Plus, Edit2, Trash2, FolderKanban, ListTodo, X, Shield, ArrowRight, Loader2 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { Users2, Plus, Edit2, Trash2, X, ArrowRight, Loader2 } from 'lucide-react';
+import { useApp } from '../context/useApp';
 import { getInitials } from '../utils/avatar';
 import { DEPARTMENTS, DEFAULT_DEPARTMENT } from '../constants/departments';
 
@@ -319,6 +319,7 @@ export default function TeamsPage() {
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
+              {submitError && <p role="alert" className="text-sm text-red-600">{submitError}</p>}
               <div>
                 <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Squad Name</label>
                 <input

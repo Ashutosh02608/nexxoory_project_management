@@ -1,10 +1,11 @@
+import { Suspense } from 'react';
 import React, { useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import SidebarNavigation from './SidebarNavigation';
 import TopNavigation from './TopNavigation';
 import GlobalSearchModal from './GlobalSearchModal';
 import QuickCreateModal from './QuickCreateModal';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 
 export default function DashboardLayout() {
   const location = useLocation();
@@ -64,7 +65,9 @@ export default function DashboardLayout() {
         <TopNavigation />
 
         <main className={`flex-1 min-w-0 min-h-0 ${isMessagesPage ? 'overflow-hidden p-2 sm:p-4' : 'overflow-y-auto p-3 sm:p-6 lg:p-8'}`}>
-          <Outlet />
+          <Suspense fallback={<p role="status">Loading page…</p>}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
 

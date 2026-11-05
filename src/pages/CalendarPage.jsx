@@ -11,8 +11,9 @@ import {
   Trash2,
   Edit2
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import { DEPARTMENTS } from '../constants/departments';
+import { asDate } from '../utils/dateHelpers';
 
 const EVENT_TYPES = [
   { value: 'meeting', label: 'Meeting', color: '#635BFF', bg: 'bg-[#635BFF]/10 text-[#635BFF] border-[#635BFF]/20' },
@@ -27,7 +28,7 @@ export default function CalendarPage() {
   const { events, updateEvent, removeEvent, projects, teams, users, currentUser } = useApp();
 
   // Navigation State: default to today
-  const [currentDate, setCurrentDate] = useState(() => new Date());
+  const [currentDate, setCurrentDate] = useState(() => asDate());
   const [viewMode, setViewMode] = useState('month'); // 'month', 'week', 'day'
   const [typeFilter, setTypeFilter] = useState('ALL');
 
@@ -104,7 +105,7 @@ export default function CalendarPage() {
 
   // Date navigation helpers
   const handlePrev = () => {
-    const next = new Date(currentDate);
+    const next = asDate(currentDate);
     if (viewMode === 'month') next.setMonth(next.getMonth() - 1);
     else if (viewMode === 'week') next.setDate(next.getDate() - 7);
     else next.setDate(next.getDate() - 1);
@@ -112,7 +113,7 @@ export default function CalendarPage() {
   };
 
   const handleNext = () => {
-    const next = new Date(currentDate);
+    const next = asDate(currentDate);
     if (viewMode === 'month') next.setMonth(next.getMonth() + 1);
     else if (viewMode === 'week') next.setDate(next.getDate() + 7);
     else next.setDate(next.getDate() + 1);
@@ -120,7 +121,7 @@ export default function CalendarPage() {
   };
 
   const handleToday = () => {
-    setCurrentDate(new Date());
+    setCurrentDate(asDate());
   };
 
   // Form open helpers
@@ -150,8 +151,8 @@ export default function CalendarPage() {
     setEditingEvent(evt);
     setDetailEvent(null);
     setErrorMsg('');
-    const sDate = evt.startDate ? new Date(evt.startDate) : new Date();
-    const eDate = evt.endDate ? new Date(evt.endDate) : sDate;
+    const sDate = evt.startDate ? asDate(evt.startDate) : asDate();
+    const eDate = evt.endDate ? asDate(evt.endDate) : sDate;
 
     setFormData({
       title: evt.title || '',
@@ -183,7 +184,7 @@ export default function CalendarPage() {
       ? `${formData.endDate}T23:59:59`
       : `${formData.endDate}T${formData.endTime || '23:59'}:00`;
 
-    if (new Date(endIso).getTime() < new Date(startIso).getTime()) {
+    if (asDate(endIso).getTime() < asDate(startIso).getTime()) {
       setErrorMsg('End date/time cannot be earlier than start date/time');
       return;
     }
@@ -222,8 +223,8 @@ export default function CalendarPage() {
   // Month grid calculations
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
-  const firstDayIndex = new Date(year, month, 1).getDay();
-  const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstDayIndex = asDate(year, month, 1).getDay();
+  const totalDaysInMonth = asDate(year, month + 1, 0).getDate();
   const monthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
 
   // Grid days (with leading empty padding)
@@ -237,10 +238,10 @@ export default function CalendarPage() {
 
   // Week view calculations
   const currDayOfWeek = currentDate.getDay();
-  const weekStart = new Date(currentDate);
+  const weekStart = asDate(currentDate);
   weekStart.setDate(currentDate.getDate() - currDayOfWeek);
   const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const day = new Date(weekStart);
+    const day = asDate(weekStart);
     day.setDate(weekStart.getDate() + i);
     return day;
   });
@@ -352,7 +353,7 @@ export default function CalendarPage() {
                 return dateStr >= sDate && dateStr <= eDate;
               });
 
-              const isToday = new Date().toISOString().split('T')[0] === dateStr;
+              const isToday = asDate().toISOString().split('T')[0] === dateStr;
 
               return (
                 <div

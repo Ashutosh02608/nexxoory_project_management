@@ -1,24 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  ListTodo,
   Plus,
   Search,
-  Filter,
-  CheckCircle2,
-  Clock,
-  MoreVertical,
   Edit2,
   Trash2,
   User,
-  Calendar,
-  Layers,
-  ChevronDown,
   X,
   MessageSquare,
   Loader2
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import { getInitials } from '../utils/avatar';
 import { ScopeRules } from '../config/rbac';
 
@@ -46,20 +38,24 @@ export default function TasksPage() {
   const [editingTask, setEditingTask] = useState(null);
   const [activeTaskDrawer, setActiveTaskDrawer] = useState(null);
   const [commentInput, setCommentInput] = useState('');
+  const submittingRef = useRef(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
 
   // Handle URL params
   useEffect(() => {
-    const sParam = searchParams.get('status');
-    if (sParam) {
-      setStatusFilter(sParam);
-    }
-    const tIdParam = searchParams.get('taskId');
-    if (tIdParam && tasks.length > 0) {
-      const match = tasks.find(t => t.id === tIdParam);
-      if (match) setActiveTaskDrawer(match);
-    }
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      const sParam = searchParams.get('status');
+      if (sParam) setStatusFilter(sParam);
+      const tIdParam = searchParams.get('taskId');
+      if (tIdParam && tasks.length > 0) {
+        const match = tasks.find(t => t.id === tIdParam);
+        if (match) setActiveTaskDrawer(match);
+      }
+    });
+    return () => { active = false; };
   }, [searchParams, tasks]);
 
   // Form state & Flexible Assignment Mode ('employee', 'team', 'member')
@@ -134,6 +130,8 @@ export default function TasksPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setIsSubmitting(true);
     setSubmitError('');
     try {
@@ -150,6 +148,7 @@ export default function TasksPage() {
     } catch (err) {
       setSubmitError(err.message || 'Failed to save task');
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -639,6 +638,7 @@ export default function TasksPage() {
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
+              {submitError && <p role="alert">{submitError}</p>}
               <div>
                 <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Title</label>
                 <input

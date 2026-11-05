@@ -10,12 +10,12 @@ import {
   EyeOff,
   AlertCircle
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import { AuthAPI } from '../services/api';
 import logoImg from '../assets/nexxoory_logo.webp';
 
 export default function LoginPage() {
-  const { login, users } = useApp();
+  const { login } = useApp();
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState('login'); // 'login', 'forgot', 'verify', 'reset'
@@ -80,7 +80,7 @@ export default function LoginPage() {
     setSuccessMsg('');
 
     try {
-      const res = await AuthAPI.forgotPassword(email);
+      await AuthAPI.forgotPassword(email);
       setSuccessMsg('A 6-digit OTP code has been sent to your registered email address.');
       setOtpCode('');
       setTimeout(() => {

@@ -95,7 +95,7 @@ export async function checkRateLimit(key, maxAttempts = 5, windowSeconds = 60) {
     };
   } catch (err) {
     // Graceful fallback to in-memory limiter on transient DB failure
-    console.warn('[RATE LIMIT] DB rate limit check failed, falling back to memory:', err.message);
+    console.warn('[RATE LIMIT] DB rate limit check failed, falling back to memory', err.name, err.code);
     return checkMemoryRateLimit(key, maxAttempts, windowSeconds);
   }
 }

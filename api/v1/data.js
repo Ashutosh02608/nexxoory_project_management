@@ -1,7 +1,9 @@
-import { authenticateRequest, invalidateUserCache } from '../../server/middleware/auth.js';
-import { handleCors, sendSuccess, sendError } from '../../server/utils/response.js';
+import { authenticateRequest } from '../../server/middleware/auth.js';
+import { handleCors, validateCsrf, sendSuccess, sendError } from '../../server/utils/response.js';
 import { query, transaction } from '../../server/config/db.js';
 import argon2 from 'argon2';
+
+const isUuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
 
 /**
  * Unified Backend Dispatcher: Handles all entities via single endpoint /api/v1/data
@@ -18,8 +20,17 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return sendError(res, 405, 'METHOD_NOT_ALLOWED', 'Only POST is accepted for unified data gateway');
   }
+  if (!validateCsrf(req, res)) return;
 
   const { entity, action = 'list', payload = {} } = req.body || {};
+
+  const contentLength = Number(req.headers['content-length'] || 0);
+  if (contentLength > 21 * 1024 * 1024) {
+    return sendError(res, 413, 'PAYLOAD_TOO_LARGE', 'Request payload exceeds the maximum size');
+  }
+  if (typeof entity !== 'string' || typeof action !== 'string' || !payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'Entity, action, and payload are invalid');
+  }
 
   if (!entity) {
     return sendError(res, 400, 'VALIDATION_ERROR', 'Field "entity" is required');
@@ -51,14 +62,74 @@ export default async function handler(req, res) {
         return sendError(res, 400, 'UNKNOWN_ENTITY', `Entity "${entity}" is not recognized`);
     }
   } catch (err) {
-    console.error(`[UNIFIED API ERROR] entity=${entity} action=${action}`, err);
-    return sendError(res, 500, 'SERVER_ERROR', err.message || 'Internal database error');
+    console.error('[UNIFIED API ERROR]', err.name, err.code);
+    return sendError(res, 500, 'SERVER_ERROR', 'The operation could not be completed');
   }
 }
 
 // -------------------------------------------------------------
 // BOOTSTRAP ALL DATA (Single high-speed round-trip)
 // -------------------------------------------------------------
+function taskScope(user, role, readOnly = false) {
+  return `(
+    ${role} = 'admin'
+    OR (${role} = 'project_manager' AND (
+      t.assignee_id = ${user}
+      OR EXISTS (SELECT 1 FROM projects p WHERE p.id = t.project_id AND (
+        p.manager_id = ${user} OR EXISTS (
+          SELECT 1 FROM teams pt WHERE pt.id = p.primary_team_id AND pt.leader_id = ${user}
+        )
+      ))
+      OR EXISTS (SELECT 1 FROM teams tm WHERE tm.id = t.team_id AND tm.leader_id = ${user})
+    ))
+    OR (${role} = 'team_member' AND (
+      t.assignee_id = ${user}
+      ${readOnly ? `OR EXISTS (SELECT 1 FROM team_members tm WHERE tm.team_id = t.team_id AND tm.user_id = ${user}) OR EXISTS (SELECT 1 FROM teams tm WHERE tm.id = t.team_id AND tm.leader_id = ${user})` : ''}
+    ))
+  )`;
+}
+
+function projectScope(alias, user, role) {
+  return `(
+    ${role} = 'admin'
+    OR ${alias}.manager_id = ${user}
+    OR EXISTS (
+      SELECT 1 FROM teams scope_team
+      WHERE scope_team.id = ${alias}.primary_team_id
+        AND (scope_team.leader_id = ${user} OR EXISTS (
+          SELECT 1 FROM team_members scope_member
+          WHERE scope_member.team_id = scope_team.id AND scope_member.user_id = ${user}
+        ))
+    )
+    OR EXISTS (
+      SELECT 1 FROM project_teams scope_pt
+      JOIN teams scope_team ON scope_team.id = scope_pt.team_id
+      WHERE scope_pt.project_id = ${alias}.id
+        AND (scope_team.leader_id = ${user} OR EXISTS (
+          SELECT 1 FROM team_members scope_member
+          WHERE scope_member.team_id = scope_team.id AND scope_member.user_id = ${user}
+        ))
+    )
+  )`;
+}
+
+function documentScope(alias, user, role) {
+  return `(
+    ${role} = 'admin'
+    OR ${alias}.author_id = ${user}
+    OR ${user} = ANY(COALESCE(${alias}.assigned_user_ids, ARRAY[]::uuid[]))
+    OR EXISTS (
+      SELECT 1 FROM folder_permissions scope_fp
+      WHERE scope_fp.folder_key = ${alias}.folder AND scope_fp.user_id = ${user}
+    )
+    OR (${alias}.project_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM projects scope_project
+      WHERE scope_project.id = ${alias}.project_id
+        AND ${projectScope('scope_project', user, role)}
+    ))
+  )`;
+}
+
 async function handleBootstrap(authUser, res) {
   const result = await query(`
     SELECT json_build_object(
@@ -111,6 +182,7 @@ async function handleBootstrap(authUser, res) {
             'tags', COALESCE(to_jsonb(p.tags), '[]'::jsonb)
           ) as p_obj
           FROM projects p
+          WHERE ${projectScope('p', '$1', '$2')}
           ORDER BY p.created_at DESC
         ) sub
       ), '[]'::json),
@@ -143,6 +215,7 @@ async function handleBootstrap(authUser, res) {
             )
           ) as t_obj
           FROM tasks t
+          WHERE ${taskScope('$1', '$2', true)}
           ORDER BY t.kanban_order ASC, t.created_at DESC
         ) sub
       ), '[]'::json),
@@ -165,6 +238,7 @@ async function handleBootstrap(authUser, res) {
           ) as d_obj
           FROM documents d
           LEFT JOIN users u ON u.id = d.author_id
+          WHERE ${documentScope('d', '$1', '$2')}
           ORDER BY d.created_at DESC
         ) sub
       ), '[]'::json),
@@ -172,6 +246,7 @@ async function handleBootstrap(authUser, res) {
       'folderPermissions', COALESCE((
         SELECT json_agg(json_build_object('id', fp.id, 'folderKey', fp.folder_key, 'userId', fp.user_id))
         FROM folder_permissions fp
+        WHERE $2 = 'admin' OR fp.user_id = $1
       ), '[]'::json),
 
       'events', COALESCE((
@@ -197,6 +272,13 @@ async function handleBootstrap(authUser, res) {
             )
           ) as e_obj
           FROM calendar_events e
+          WHERE $2 = 'admin'
+             OR e.creator_id = $1
+             OR EXISTS (SELECT 1 FROM calendar_event_attendees ea WHERE ea.event_id = e.id AND ea.user_id = $1)
+             OR (e.department IS NOT NULL AND e.department = (SELECT department FROM users WHERE id = $1))
+             OR EXISTS (SELECT 1 FROM teams et WHERE et.id = e.team_id AND (et.leader_id = $1 OR EXISTS
+                (SELECT 1 FROM team_members etm WHERE etm.team_id = et.id AND etm.user_id = $1)))
+             OR EXISTS (SELECT 1 FROM projects ep WHERE ep.id = e.project_id AND ${projectScope('ep', '$1', '$2')})
           ORDER BY e.start_date ASC
         ) sub
       ), '[]'::json),
@@ -252,7 +334,7 @@ async function handleBootstrap(authUser, res) {
         ) sub
       ), '[]'::json)
     ) as payload;
-  `, [authUser.id]);
+  `, [authUser.id, authUser.role]);
 
   const data = result.rows[0]?.payload || {};
 
@@ -285,8 +367,15 @@ async function handleUsers(action, payload, authUser, res) {
     if (authUser.role !== 'admin') {
       return sendError(res, 403, 'FORBIDDEN', 'Only administrators can create users');
     }
-    const { name, email, password, role, designation, department, status } = payload;
+    const { name, email, password, role, designation, department, status, clientMutationId } = payload;
     if (!name || !email) return sendError(res, 400, 'VALIDATION_ERROR', 'Name and email required');
+    if (!isUuid(clientMutationId)) return sendError(res, 400, 'VALIDATION_ERROR', 'A valid mutation ID is required');
+
+    const priorMutation = await query(`
+      SELECT id, name, email, role, designation, department, status, created_at
+      FROM users WHERE id = $1 AND LOWER(email) = LOWER($2)
+    `, [clientMutationId, email.trim()]);
+    if (priorMutation.rows[0]) return sendSuccess(res, { user: priorMutation.rows[0] }, 'User already created');
 
     const existing = await query('SELECT id FROM users WHERE LOWER(email) = LOWER($1)', [email.trim()]);
     if (existing.rows.length > 0) return sendError(res, 409, 'EMAIL_EXISTS', 'Email already registered');
@@ -296,12 +385,12 @@ async function handleUsers(action, payload, authUser, res) {
     });
 
     const insertResult = await query(`
-      INSERT INTO users (name, email, password_hash, role, designation, department, status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO users (id, name, email, password_hash, role, designation, department, status)
+      VALUES ($8, $1, $2, $3, $4, $5, $6, $7)
       RETURNING id, name, email, role, designation, department, status, created_at;
     `, [
       name.trim(), email.trim().toLowerCase(), passwordHash,
-      role || 'team_member', designation || 'Team Contributor', department || 'Development', status || 'Active'
+      role || 'team_member', designation || 'Team Contributor', department || 'Development', status || 'Active', clientMutationId
     ]);
 
     const newUser = insertResult.rows[0];
@@ -441,7 +530,6 @@ async function handleUsers(action, payload, authUser, res) {
     });
 
     // Invalidate auth memory cache
-    invalidateUserCache(id);
 
     return sendSuccess(res, { id, deleted: true }, 'Employee account successfully retired');
   }
@@ -469,37 +557,51 @@ async function handleTeams(action, payload, authUser, res) {
 
   if (action === 'create') {
     if (authUser.role !== 'admin') return sendError(res, 403, 'FORBIDDEN', 'Admin only');
-    const { name, department, leaderId, description, color, memberIds } = payload;
-    const insert = await query(`
-      INSERT INTO teams (name, department, leader_id, description, color)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING *;
-    `, [name, department, leaderId || null, description || '', color || '#635BFF']);
-    const t = insert.rows[0];
-
-    if (Array.isArray(memberIds)) {
-      for (const uid of memberIds) {
-        await query(`INSERT INTO team_members (team_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [t.id, uid]);
+    const { name, department, leaderId, description, color, memberIds, clientMutationId } = payload;
+    if (typeof name !== 'string' || !name.trim()) return sendError(res, 400, 'VALIDATION_ERROR', 'Team name is required');
+    if (!isUuid(clientMutationId)) return sendError(res, 400, 'VALIDATION_ERROR', 'A valid mutation ID is required');
+    const t = await transaction(async (client) => {
+      const insert = await client.query(`
+        INSERT INTO teams (id, name, department, leader_id, description, color)
+        VALUES ($6, $1, $2, $3, $4, $5)
+        ON CONFLICT (id) DO NOTHING
+        RETURNING *;
+      `, [name.trim(), department, leaderId || null, description || '', color || '#635BFF', clientMutationId]);
+      const wasInserted = Boolean(insert.rows[0]);
+      const existing = wasInserted ? insert : await client.query('SELECT * FROM teams WHERE id = $1', [clientMutationId]);
+      const team = existing.rows[0];
+      if (!team) return null;
+      if (wasInserted && Array.isArray(memberIds)) {
+        for (const uid of memberIds) {
+          await client.query(`INSERT INTO team_members (team_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [team.id, uid]);
+        }
       }
-    }
+      return team;
+    });
+    if (!t) return sendError(res, 409, 'IDEMPOTENCY_CONFLICT', 'Mutation ID is already in use');
     return sendSuccess(res, { team: { id: t.id, name: t.name, department: t.department, leaderId: t.leader_id, memberIds: memberIds || [] } }, 'Team created', 201);
   }
 
   if (action === 'update') {
     if (authUser.role !== 'admin') return sendError(res, 403, 'FORBIDDEN', 'Admin only');
     const { id, name, department, leaderId, description, color, memberIds } = payload;
-    await query(`
-      UPDATE teams SET name = COALESCE($2, name), department = COALESCE($3, department),
-      leader_id = $4, description = COALESCE($5, description), color = COALESCE($6, color),
-      updated_at = CURRENT_TIMESTAMP WHERE id = $1;
-    `, [id, name, department, leaderId || null, description, color]);
-
-    if (Array.isArray(memberIds)) {
-      await query('DELETE FROM team_members WHERE team_id = $1;', [id]);
-      for (const uid of memberIds) {
-        await query(`INSERT INTO team_members (team_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [id, uid]);
+    const updated = await transaction(async (client) => {
+      const result = await client.query(`
+        UPDATE teams SET name = COALESCE($2, name), department = COALESCE($3, department),
+        leader_id = CASE WHEN $7 THEN $4 ELSE leader_id END,
+        description = COALESCE($5, description), color = COALESCE($6, color),
+        updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING id;
+      `, [id, name?.trim(), department, leaderId || null, description, color, Object.hasOwn(payload, 'leaderId')]);
+      if (!result.rows.length) return false;
+      if (Array.isArray(memberIds)) {
+        await client.query('DELETE FROM team_members WHERE team_id = $1;', [id]);
+        for (const uid of memberIds) {
+          await client.query(`INSERT INTO team_members (team_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [id, uid]);
+        }
       }
-    }
+      return true;
+    });
+    if (!updated) return sendError(res, 404, 'NOT_FOUND', 'Team not found');
     return sendSuccess(res, { id }, 'Team updated');
   }
 
@@ -515,7 +617,11 @@ async function handleTeams(action, payload, authUser, res) {
 // -------------------------------------------------------------
 async function handleProjects(action, payload, authUser, res) {
   if (action === 'list') {
-    const result = await query(`SELECT * FROM projects ORDER BY created_at DESC;`);
+    const result = await query(`
+      SELECT p.* FROM projects p
+      WHERE ${projectScope('p', '$1', '$2')}
+      ORDER BY p.created_at DESC;
+    `, [authUser.id, authUser.role]);
     const projects = result.rows.map(r => ({
       id: r.id, name: r.name, description: r.description, managerId: r.manager_id, teamId: r.primary_team_id,
       priority: r.priority, status: r.status, startDate: r.start_date, dueDate: r.due_date,
@@ -526,25 +632,41 @@ async function handleProjects(action, payload, authUser, res) {
 
   if (action === 'create') {
     if (authUser.role !== 'admin' && authUser.role !== 'project_manager') return sendError(res, 403, 'FORBIDDEN', 'Unauthorized');
-    const { name, description, managerId, teamId, priority, status, startDate, dueDate, progress, budget, tags } = payload;
-    const result = await query(`
-      INSERT INTO projects (name, description, manager_id, primary_team_id, priority, status, start_date, due_date, progress, budget, tags)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *;
-    `, [name, description || '', managerId || authUser.id, teamId || null, priority || 'Medium', status || 'Planning',
+    const { name, description, managerId, teamId, priority, status, startDate, dueDate, progress, budget, tags, clientMutationId } = payload;
+    if (typeof name !== 'string' || !name.trim() || name.trim().length > 200) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Project name must contain 1 to 200 characters');
+    }
+    if (!isUuid(clientMutationId)) return sendError(res, 400, 'VALIDATION_ERROR', 'A valid mutation ID is required');
+    if (authUser.role === 'project_manager' && teamId) {
+      const ledTeam = await query('SELECT 1 FROM teams WHERE id = $1 AND leader_id = $2', [teamId, authUser.id]);
+      if (!ledTeam.rows.length) return sendError(res, 403, 'FORBIDDEN', 'You can only assign teams you lead');
+    }
+    const effectiveManagerId = authUser.role === 'admin' ? (managerId || authUser.id) : authUser.id;
+    const created = await transaction(async (client) => {
+      const result = await client.query(`
+      INSERT INTO projects (id, name, description, manager_id, primary_team_id, priority, status, start_date, due_date, progress, budget, tags)
+      VALUES ($12, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      ON CONFLICT (id) DO NOTHING RETURNING *;
+    `, [name.trim(), description || '', effectiveManagerId, teamId || null, priority || 'Medium', status || 'Planning',
       startDate || new Date().toISOString().split('T')[0], dueDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-      progress || 0, budget || 0, tags || []]);
-    const project = result.rows[0];
+      progress || 0, budget || 0, tags || [], clientMutationId]);
+      const wasInserted = Boolean(result.rows[0]);
+      const existing = wasInserted ? result : await client.query(`
+        SELECT p.* FROM projects p WHERE p.id = $1 AND ${projectScope('p', '$2', '$3')}
+      `, [clientMutationId, authUser.id, authUser.role]);
+      const project = existing.rows[0];
+      if (!project) return null;
 
     // Create notification for assigned manager
-    if (project.manager_id && project.manager_id !== authUser.id) {
-      await query(`
+    if (wasInserted && project.manager_id && project.manager_id !== authUser.id) {
+      await client.query(`
         INSERT INTO notifications (user_id, title, message, type, link)
         VALUES ($1, $2, $3, 'project', '/projects');
       `, [project.manager_id, `Assigned to Project: ${project.name}`, `You have been assigned as the manager for ${project.name}`]);
     }
 
     // Create the project's messaging room as part of project creation.
-    const existingRoom = await query(`
+      const existingRoom = await client.query(`
       SELECT id FROM conversations
       WHERE type = 'project' AND project_id = $1
       LIMIT 1;
@@ -552,7 +674,7 @@ async function handleProjects(action, payload, authUser, res) {
     let conversationId = existingRoom.rows[0]?.id;
 
     if (!conversationId) {
-      const room = await query(`
+        const room = await client.query(`
         INSERT INTO conversations (name, type, project_id, is_read_only)
         VALUES ($1, 'project', $2, false)
         RETURNING id;
@@ -561,7 +683,7 @@ async function handleProjects(action, payload, authUser, res) {
     }
 
     // Include the project manager and members of every assigned team.
-    await query(`
+      await client.query(`
       INSERT INTO conversation_participants (conversation_id, user_id)
       SELECT $1, u.id
       FROM users u
@@ -569,7 +691,7 @@ async function handleProjects(action, payload, authUser, res) {
       ON CONFLICT (conversation_id, user_id) DO NOTHING;
     `, [conversationId, project.manager_id]);
 
-    await query(`
+      await client.query(`
       INSERT INTO conversation_participants (conversation_id, user_id)
       SELECT $1, tm.user_id
       FROM project_teams pt
@@ -579,55 +701,71 @@ async function handleProjects(action, payload, authUser, res) {
       ON CONFLICT (conversation_id, user_id) DO NOTHING;
     `, [conversationId, project.id]);
 
-    return sendSuccess(res, { project, conversationId }, 'Project and messaging group created', 201);
+      return { project, conversationId };
+    });
+    if (!created) return sendError(res, 409, 'IDEMPOTENCY_CONFLICT', 'Mutation ID is already in use');
+    return sendSuccess(res, created, 'Project and messaging group created', 201);
   }
 
   if (action === 'update') {
     const { id, name, description, managerId, teamId, priority, status, dueDate, progress, budget, spent, tags } = payload;
-    await query(`
-      UPDATE projects SET name = COALESCE($2, name), description = COALESCE($3, description), manager_id = $4,
-      primary_team_id = $5, priority = COALESCE($6, priority), status = COALESCE($7, status), due_date = COALESCE($8, due_date),
+    const allowed = await query(`SELECT 1 FROM projects p WHERE p.id = $1 AND ${projectScope('p', '$2', '$3')}`, [id, authUser.id, authUser.role]);
+    if (!allowed.rows.length || authUser.role === 'team_member') return sendError(res, 403, 'FORBIDDEN', 'You cannot update this project');
+    if (authUser.role !== 'admin' && managerId && managerId !== authUser.id) return sendError(res, 403, 'FORBIDDEN', 'You cannot reassign this project');
+    if (authUser.role !== 'admin' && teamId) {
+      const ledTeam = await query('SELECT 1 FROM teams WHERE id = $1 AND leader_id = $2', [teamId, authUser.id]);
+      if (!ledTeam.rows.length) return sendError(res, 403, 'FORBIDDEN', 'You can only assign teams you lead');
+    }
+    const updated = await transaction(async (client) => {
+      const result = await client.query(`
+      UPDATE projects SET name = COALESCE($2, name), description = COALESCE($3, description),
+      manager_id = CASE WHEN $13 THEN $4 ELSE manager_id END,
+      primary_team_id = CASE WHEN $14 THEN $5 ELSE primary_team_id END,
+      priority = COALESCE($6, priority), status = COALESCE($7, status), due_date = COALESCE($8, due_date),
       progress = COALESCE($9, progress), budget = COALESCE($10, budget), spent = COALESCE($11, spent), tags = COALESCE($12, tags),
-      updated_at = CURRENT_TIMESTAMP WHERE id = $1;
-    `, [id, name, description, managerId || null, teamId || null, priority, status, dueDate, progress, budget, spent, tags]);
+      updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING id;
+    `, [id, name?.trim(), description, managerId || null, teamId || null, priority, status, dueDate, progress, budget, spent, tags,
+      Object.hasOwn(payload, 'managerId'), Object.hasOwn(payload, 'teamId')]);
+      if (!result.rows.length) return null;
 
-    // Resynchronize project group conversation & membership
-    const existingRoom = await query("SELECT id FROM conversations WHERE type = 'project' AND project_id = $1 LIMIT 1;", [id]);
-    let conversationId = existingRoom.rows[0]?.id;
-    const isReadOnly = ['archived', 'completed'].includes(String(status || '').toLowerCase());
+      // Resynchronize project group conversation & membership
+      const existingRoom = await client.query("SELECT id FROM conversations WHERE type = 'project' AND project_id = $1 LIMIT 1;", [id]);
+      let conversationId = existingRoom.rows[0]?.id;
+      const isReadOnly = ['archived', 'completed'].includes(String(status || '').toLowerCase());
 
-    if (!conversationId) {
-      const room = await query(`
+      if (!conversationId) {
+        const room = await client.query(`
         INSERT INTO conversations (name, type, project_id, is_read_only)
         VALUES ($1, 'project', $2, $3)
         RETURNING id;
       `, [`${name || 'Project'} — Project Group`, id, isReadOnly]);
       conversationId = room.rows[0].id;
-    } else {
-      if (name || status) {
-        await query("UPDATE conversations SET name = COALESCE($1, name), is_read_only = $2 WHERE id = $3;", [name ? `${name} — Project Group` : null, isReadOnly, conversationId]);
+      } else if (name || status) {
+        await client.query("UPDATE conversations SET name = COALESCE($1, name), is_read_only = $2 WHERE id = $3;", [name ? `${name} — Project Group` : null, isReadOnly, conversationId]);
       }
-    }
 
-    if (managerId) {
-      await query(`
+      if (managerId) {
+        await client.query(`
         INSERT INTO conversation_participants (conversation_id, user_id)
         SELECT $1, id FROM users WHERE id = $2 AND status != 'Inactive'
         ON CONFLICT (conversation_id, user_id) DO NOTHING;
       `, [conversationId, managerId]);
-    }
+      }
 
-    if (teamId) {
-      await query(`
+      if (teamId) {
+        await client.query(`
         INSERT INTO conversation_participants (conversation_id, user_id)
         SELECT $1, tm.user_id FROM team_members tm
         JOIN users u ON u.id = tm.user_id
         WHERE tm.team_id = $2 AND u.status != 'Inactive'
         ON CONFLICT (conversation_id, user_id) DO NOTHING;
       `, [conversationId, teamId]);
-    }
+      }
+      return { conversationId };
+    });
 
-    return sendSuccess(res, { id, conversationId }, 'Project updated');
+    if (!updated) return sendError(res, 404, 'NOT_FOUND', 'Project not found');
+    return sendSuccess(res, { id, conversationId: updated.conversationId }, 'Project updated');
   }
 
   if (action === 'delete') {
@@ -641,14 +779,37 @@ async function handleProjects(action, payload, authUser, res) {
 // TASKS HANDLER
 // -------------------------------------------------------------
 async function handleTasks(action, payload, authUser, res) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'Task payload must be an object');
+  }
+  if (['update', 'delete'].includes(action) && !isUuid(payload.id)) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'A valid task ID is required');
+  }
+  if (['create', 'update'].includes(action)) {
+    if ((action === 'create' || Object.hasOwn(payload, 'projectId')) && !isUuid(payload.projectId)) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'A valid project ID is required');
+    }
+    if (['assigneeId', 'teamId'].some(key => payload[key] && !isUuid(payload[key]))) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid assignee or team ID');
+    }
+    if ((action === 'create' || Object.hasOwn(payload, 'title')) &&
+        (typeof payload.title !== 'string' || !payload.title.trim() || payload.title.length > 255)) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Task title must contain 1 to 255 characters');
+    }
+    if (Object.hasOwn(payload, 'progress') &&
+        (!Number.isInteger(payload.progress) || payload.progress < 0 || payload.progress > 100)) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Task progress must be an integer from 0 to 100');
+    }
+  }
+
   if (action === 'list') {
     const result = await query(`
       SELECT t.*,
         COALESCE((SELECT json_agg(json_build_object('id', s.id, 'title', s.title, 'completed', s.completed)) FROM subtasks s WHERE s.task_id = t.id), '[]') as subtasks,
         COALESCE((SELECT json_agg(json_build_object('id', c.id, 'userId', c.user_id, 'userName', u.name, 'text', c.text, 'timestamp', to_char(c.created_at, 'YYYY-MM-DD HH24:MI')))
                   FROM task_comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.task_id = t.id), '[]') as comments
-      FROM tasks t ORDER BY t.kanban_order ASC, t.created_at DESC;
-    `);
+      FROM tasks t WHERE ${taskScope('$1', '$2', true)} ORDER BY t.kanban_order ASC, t.created_at DESC;
+    `, [authUser.id, authUser.role]);
     const tasks = result.rows.map(r => ({
       id: r.id, title: r.title, description: r.description, projectId: r.project_id, assigneeId: r.assignee_id,
       teamId: r.team_id, priority: r.priority, status: r.status, startDate: r.start_date, dueDate: r.due_date,
@@ -658,64 +819,113 @@ async function handleTasks(action, payload, authUser, res) {
   }
 
   if (action === 'create') {
-    const { title, description, projectId, assigneeId, teamId, priority, status, startDate, dueDate, progress, labels } = payload;
-    const result = await query(`
-      INSERT INTO tasks (title, description, project_id, assignee_id, team_id, priority, status, start_date, due_date, progress, labels)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *;
+    if (!['admin', 'project_manager'].includes(authUser.role)) {
+      return sendError(res, 403, 'FORBIDDEN', 'You cannot create tasks');
+    }
+    const { title, description, projectId, assigneeId, teamId, priority, status, startDate, dueDate, progress, labels, clientMutationId } = payload;
+    if (!isUuid(clientMutationId)) return sendError(res, 400, 'VALIDATION_ERROR', 'A valid mutation ID is required');
+    const task = await transaction(async client => {
+      const result = await client.query(`
+      INSERT INTO tasks (id, title, description, project_id, assignee_id, team_id, priority, status, start_date, due_date, progress, labels)
+      SELECT $14, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+      WHERE $13 = 'admin' OR (
+        EXISTS (
+          SELECT 1 FROM projects p WHERE p.id = $3 AND (
+            p.manager_id = $12 OR EXISTS (
+              SELECT 1 FROM teams pt WHERE pt.id = p.primary_team_id AND pt.leader_id = $12
+            )
+          )
+        )
+        AND ($5::uuid IS NULL OR EXISTS (SELECT 1 FROM teams WHERE id = $5 AND leader_id = $12))
+      )
+      ON CONFLICT (id) DO NOTHING
+      RETURNING *;
     `, [title, description || '', projectId || null, assigneeId || null, teamId || null, priority || 'Medium', status || 'To Do',
       startDate || new Date().toISOString().split('T')[0], dueDate || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-      progress || 0, labels || ['General']]);
-    const r = result.rows[0];
+      progress || 0, labels || ['General'], authUser.id, authUser.role, clientMutationId]);
+      const wasInserted = Boolean(result.rows[0]);
+      const existing = wasInserted ? result : await client.query(`
+        SELECT t.* FROM tasks t WHERE t.id = $1 AND ${taskScope('$2', '$3', true)}
+      `, [clientMutationId, authUser.id, authUser.role]);
+      const r = existing.rows[0];
+      if (!r) return null;
 
-    const normalizedTask = {
-      id: r.id,
-      title: r.title,
-      description: r.description,
-      projectId: r.project_id,
-      assigneeId: r.assignee_id,
-      teamId: r.team_id,
-      priority: r.priority,
-      status: r.status,
-      startDate: r.start_date ? new Date(r.start_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-      dueDate: r.due_date ? new Date(r.due_date).toISOString().split('T')[0] : new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-      progress: r.progress || 0,
-      labels: r.labels || [],
-      subtasks: [],
-      comments: []
-    };
+      const normalizedTask = {
+        id: r.id,
+        title: r.title,
+        description: r.description,
+        projectId: r.project_id,
+        assigneeId: r.assignee_id,
+        teamId: r.team_id,
+        priority: r.priority,
+        status: r.status,
+        startDate: r.start_date ? new Date(r.start_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+        dueDate: r.due_date ? new Date(r.due_date).toISOString().split('T')[0] : new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+        progress: r.progress || 0,
+        labels: r.labels || [],
+        subtasks: [],
+        comments: []
+      };
 
-    // Create notification for assigned user
-    if (normalizedTask.assigneeId && normalizedTask.assigneeId !== authUser.id) {
-      await query(`
-        INSERT INTO notifications (user_id, title, message, type, link)
-        VALUES ($1, $2, $3, 'task', '/tasks');
-      `, [normalizedTask.assigneeId, `Task Assigned: ${normalizedTask.title}`, `You have been assigned to task "${normalizedTask.title}"`]);
-    }
+      // Create notification for assigned user
+      if (wasInserted && normalizedTask.assigneeId && normalizedTask.assigneeId !== authUser.id) {
+        await client.query(`
+          INSERT INTO notifications (user_id, title, message, type, link)
+          VALUES ($1, $2, $3, 'task', '/tasks');
+        `, [normalizedTask.assigneeId, `Task Assigned: ${normalizedTask.title}`, `You have been assigned to task "${normalizedTask.title}"`]);
+      }
 
-    return sendSuccess(res, { task: normalizedTask }, 'Task created', 201);
+      return normalizedTask;
+    });
+    if (!task) return sendError(res, 403, 'FORBIDDEN', 'You cannot create tasks in this project or team');
+    return sendSuccess(res, { task }, 'Task created', 201);
   }
 
   if (action === 'update') {
     const { id, title, description, projectId, assigneeId, teamId, priority, status, dueDate, progress, labels, comments } = payload;
-    await query(`
-      UPDATE tasks SET title = COALESCE($2, title), description = COALESCE($3, description), project_id = $4, assignee_id = $5,
-      team_id = $6, priority = COALESCE($7, priority), status = COALESCE($8, status), due_date = COALESCE($9, due_date),
-      progress = COALESCE($10, progress), labels = COALESCE($11, labels), updated_at = CURRENT_TIMESTAMP WHERE id = $1;
-    `, [id, title, description, projectId || null, assigneeId || null, teamId || null, priority, status, dueDate, progress, labels]);
+    const updated = await transaction(async client => {
+      const result = await client.query(`
+      UPDATE tasks t SET title = COALESCE($2, title), description = COALESCE($3, description), project_id = CASE WHEN $12 THEN $4 ELSE project_id END,
+      assignee_id = CASE WHEN $13 THEN $5 ELSE assignee_id END,
+      team_id = CASE WHEN $14 THEN $6 ELSE team_id END, priority = COALESCE($7, priority), status = COALESCE($8, status), due_date = COALESCE($9, due_date),
+      progress = COALESCE($10, progress), labels = COALESCE($11, labels), updated_at = CURRENT_TIMESTAMP WHERE t.id = $1
+      AND ${taskScope('$15', '$16')}
+      AND ($16 = 'admin' OR (
+        (NOT $12 OR $4 IS NOT DISTINCT FROM t.project_id OR ($16 = 'project_manager' AND EXISTS
+          (SELECT 1 FROM projects WHERE id = $4 AND manager_id = $15)))
+        AND (NOT $14 OR $6 IS NOT DISTINCT FROM t.team_id OR ($16 = 'project_manager' AND ($6 IS NULL OR EXISTS
+          (SELECT 1 FROM teams WHERE id = $6 AND leader_id = $15))))
+        AND ($16 <> 'team_member' OR NOT $13 OR $5 IS NOT DISTINCT FROM t.assignee_id)
+      ));
+    `, [id, title, description, projectId || null, assigneeId || null, teamId || null, priority, status, dueDate, progress, labels,
+      Object.hasOwn(payload, 'projectId'), Object.hasOwn(payload, 'assigneeId'), Object.hasOwn(payload, 'teamId'),
+      authUser.id, authUser.role]);
+      if (result.rowCount === 0) return false;
 
-    if (Array.isArray(comments) && comments.length > 0) {
-      const last = comments[comments.length - 1];
-      if (last?.text && !last.id?.startsWith('cmt-saved')) {
-        await query(`INSERT INTO task_comments (task_id, user_id, text) VALUES ($1, $2, $3);`, [id, authUser.id, last.text]);
+      if (Array.isArray(comments) && comments.length > 0) {
+        const last = comments[comments.length - 1];
+        if (last?.text && typeof last.id === 'string' && /^c-\d+$/.test(last.id)) {
+          await client.query(`INSERT INTO task_comments (task_id, user_id, text) VALUES ($1, $2, $3);`, [id, authUser.id, last.text]);
+        }
       }
-    }
+      return true;
+    });
+    if (!updated) return sendError(res, 404, 'NOT_FOUND', 'Task not found or unavailable');
     return sendSuccess(res, { id }, 'Task updated');
   }
 
   if (action === 'delete') {
-    await query('DELETE FROM tasks WHERE id = $1', [payload.id]);
+    if (!['admin', 'project_manager'].includes(authUser.role)) {
+      return sendError(res, 403, 'FORBIDDEN', 'You cannot delete tasks');
+    }
+    const result = await query(
+      `DELETE FROM tasks t WHERE t.id = $1 AND ${taskScope('$2', '$3')}`,
+      [payload.id, authUser.id, authUser.role]
+    );
+    if (result.rowCount === 0) return sendError(res, 404, 'NOT_FOUND', 'Task not found or unavailable');
     return sendSuccess(res, { id: payload.id }, 'Task deleted');
   }
+  return sendError(res, 400, 'UNKNOWN_ACTION', 'Action is not supported for tasks');
 }
 
 // -------------------------------------------------------------
@@ -724,8 +934,12 @@ async function handleTasks(action, payload, authUser, res) {
 async function handleDocuments(action, payload, authUser, res) {
   if (action === 'list') {
     const result = await query(`
-      SELECT d.*, u.name as author_name FROM documents d LEFT JOIN users u ON u.id = d.author_id ORDER BY d.created_at DESC;
-    `);
+      SELECT d.id, d.name, d.folder, d.project_id, d.size_bytes, d.mime_type,
+             d.author_id, d.assigned_user_ids, d.created_at, d.updated_at, u.name as author_name
+      FROM documents d LEFT JOIN users u ON u.id = d.author_id
+      WHERE ${documentScope('d', '$1', '$2')}
+      ORDER BY d.created_at DESC;
+    `, [authUser.id, authUser.role]);
     const documents = result.rows.map(r => ({
       id: r.id,
       name: r.name,
@@ -739,30 +953,62 @@ async function handleDocuments(action, payload, authUser, res) {
       date: new Date(r.created_at).toISOString().split('T')[0],
       updatedAt: new Date(r.updated_at || r.created_at).toISOString().split('T')[0]
     }));
-    const fpRes = await query(`SELECT folder_key as "folderKey", user_id as "userId" FROM folder_permissions;`);
+    const fpRes = await query(`
+      SELECT folder_key as "folderKey", user_id as "userId" FROM folder_permissions
+      WHERE $2 = 'admin' OR user_id = $1;
+    `, [authUser.id, authUser.role]);
     return sendSuccess(res, { documents, folderPermissions: fpRes.rows }, 'Documents retrieved');
   }
 
   if (action === 'create') {
-    const { name, folder, projectId, type, mimeType, fileBase64, sizeBytes, assignedUserIds } = payload;
-    let buf;
-    if (fileBase64) {
-      // Decode base64 payload
-      const cleaned = fileBase64.replace(/^data:[^;]+;base64,/, '');
-      buf = Buffer.from(cleaned, 'base64');
-    } else {
-      buf = Buffer.from('Nexxoory Document Payload');
+    const { name, folder, projectId, type, mimeType, fileBase64, sizeBytes, assignedUserIds, clientMutationId } = payload;
+    if (typeof name !== 'string' || !name.trim() || name.trim().length > 255) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Document name must contain 1 to 255 characters');
     }
+    if (!isUuid(clientMutationId)) return sendError(res, 400, 'VALIDATION_ERROR', 'A valid mutation ID is required');
+    if (typeof fileBase64 !== 'string' || !fileBase64) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Document content is required');
+    }
+    if (projectId) {
+      const projectAccess = await query(`SELECT 1 FROM projects p WHERE p.id = $1 AND ${projectScope('p', '$2', '$3')}`, [projectId, authUser.id, authUser.role]);
+      if (!projectAccess.rows.length) return sendError(res, 403, 'FORBIDDEN', 'You cannot upload to this project');
+    }
+    const cleaned = fileBase64.replace(/^data:[^;]+;base64,/, '');
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(cleaned) || cleaned.length % 4 !== 0) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Document content is not valid Base64');
+    }
+    const buf = Buffer.from(cleaned, 'base64');
 
     if (buf.length > 15 * 1024 * 1024) {
       return sendError(res, 400, 'PAYLOAD_TOO_LARGE', 'Document size exceeds maximum 15MB limit');
     }
 
+    if (sizeBytes != null && Number(sizeBytes) !== buf.length) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Document size does not match its content');
+    }
+    const allowedMimeTypes = new Set([
+      'application/pdf', 'text/plain', 'text/csv',
+      'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'image/png', 'image/jpeg', 'image/webp', 'application/octet-stream'
+    ]);
     const resolvedMime = mimeType || (type?.toLowerCase().includes('pdf') ? 'application/pdf' : 'application/octet-stream');
+    if (!allowedMimeTypes.has(resolvedMime)) return sendError(res, 400, 'UNSUPPORTED_FILE_TYPE', 'Document type is not supported');
     const result = await query(`
-      INSERT INTO documents (name, folder, project_id, size_bytes, mime_type, file_data, author_id, assigned_user_ids)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, name, folder, project_id, size_bytes, mime_type, author_id, assigned_user_ids, created_at, updated_at;
-    `, [name, folder || (projectId ? 'Project Document' : 'General'), projectId || null, buf.length, resolvedMime, buf, authUser.id, assignedUserIds || []]);
+      INSERT INTO documents (id, name, folder, project_id, size_bytes, mime_type, file_data, author_id, assigned_user_ids)
+      VALUES ($9, $1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (id) DO NOTHING
+      RETURNING id, name, folder, project_id, size_bytes, mime_type, author_id, assigned_user_ids, created_at, updated_at;
+    `, [name.trim(), folder || (projectId ? 'Project Document' : 'General'), projectId || null, buf.length, resolvedMime, buf, authUser.id,
+      authUser.role === 'admin' && Array.isArray(assignedUserIds) ? assignedUserIds : [], clientMutationId]);
+    if (!result.rows[0]) {
+      const existing = await query(`
+        SELECT id, name, folder, project_id, size_bytes, mime_type, author_id, assigned_user_ids, created_at, updated_at
+        FROM documents d WHERE d.id = $1 AND ${documentScope('d', '$2', '$3')}
+      `, [clientMutationId, authUser.id, authUser.role]);
+      if (!existing.rows[0]) return sendError(res, 409, 'IDEMPOTENCY_CONFLICT', 'Mutation ID is already in use');
+      return sendSuccess(res, { document: existing.rows[0] }, 'Document already created', 200);
+    }
     return sendSuccess(res, { document: result.rows[0] }, 'Document created', 201);
   }
 
@@ -772,8 +1018,8 @@ async function handleDocuments(action, payload, authUser, res) {
     const docRes = await query(`
       SELECT id, name, mime_type, size_bytes, file_data, project_id, author_id, assigned_user_ids
       FROM documents
-      WHERE id = $1;
-    `, [id]);
+      WHERE id = $1 AND ${documentScope('documents', '$2', '$3')};
+    `, [id, authUser.id, authUser.role]);
     if (!docRes.rows[0]) return sendError(res, 404, 'NOT_FOUND', 'Document not found');
     const doc = docRes.rows[0];
 
@@ -811,15 +1057,18 @@ async function handleDocuments(action, payload, authUser, res) {
 
   if (action === 'update') {
     const { id, name, folder, projectId, assignedUserIds } = payload;
-    await query(`
-      UPDATE documents
+    const result = await query(`
+      UPDATE documents d
       SET name = COALESCE($2, name),
           folder = COALESCE($3, folder),
-          project_id = $4,
-          assigned_user_ids = COALESCE($5, assigned_user_ids),
+          project_id = CASE WHEN $8 THEN $4 ELSE project_id END,
+          assigned_user_ids = CASE WHEN $7 = 'admin' THEN COALESCE($5, assigned_user_ids) ELSE assigned_user_ids END,
           updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1;
-    `, [id, name, folder, projectId || null, assignedUserIds ? assignedUserIds : null]);
+      WHERE id = $1 AND ${documentScope('d', '$6', '$7')}
+      RETURNING id;
+    `, [id, name?.trim(), folder, projectId || null, Array.isArray(assignedUserIds) ? assignedUserIds : null,
+      authUser.id, authUser.role, Object.hasOwn(payload, 'projectId')]);
+    if (!result.rows.length) return sendError(res, 404, 'NOT_FOUND', 'Document not found or unavailable');
     return sendSuccess(res, { id }, 'Document updated');
   }
 
@@ -828,9 +1077,10 @@ async function handleDocuments(action, payload, authUser, res) {
       return sendError(res, 403, 'FORBIDDEN', 'Only Admin can manage file access permissions');
     }
     const { id, userIds } = payload;
-    await query(`
+    const result = await query(`
       UPDATE documents SET assigned_user_ids = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1;
     `, [id, userIds || []]);
+    if (!result.rowCount) return sendError(res, 404, 'NOT_FOUND', 'Document not found');
     return sendSuccess(res, { id, userIds }, 'File access permissions updated');
   }
 
@@ -839,17 +1089,23 @@ async function handleDocuments(action, payload, authUser, res) {
       return sendError(res, 403, 'FORBIDDEN', 'Only Admin can manage folder access permissions');
     }
     const { folderKey, userIds } = payload;
-    await query(`DELETE FROM folder_permissions WHERE folder_key = $1;`, [folderKey]);
-    if (Array.isArray(userIds)) {
-      for (const uid of userIds) {
-        await query(`INSERT INTO folder_permissions (folder_key, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [folderKey, uid]);
+    await transaction(async (client) => {
+      await client.query(`DELETE FROM folder_permissions WHERE folder_key = $1;`, [folderKey]);
+      if (Array.isArray(userIds)) {
+        for (const uid of userIds) {
+          await client.query(`INSERT INTO folder_permissions (folder_key, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [folderKey, uid]);
+        }
       }
-    }
+    });
     return sendSuccess(res, { folderKey, userIds }, 'Folder access permissions updated');
   }
 
   if (action === 'delete') {
-    await query('DELETE FROM documents WHERE id = $1', [payload.id]);
+    const result = await query(`
+      DELETE FROM documents d WHERE d.id = $1
+        AND ($3 = 'admin' OR d.author_id = $2)
+    `, [payload.id, authUser.id, authUser.role]);
+    if (!result.rowCount) return sendError(res, 404, 'NOT_FOUND', 'Document not found or unavailable');
     return sendSuccess(res, { id: payload.id }, 'Document deleted');
   }
 }
@@ -868,8 +1124,15 @@ async function handleCalendar(action, payload, authUser, res) {
           WHERE a.event_id = e.id
         ), '[]'::json) AS attendees
       FROM calendar_events e
+      WHERE $2 = 'admin'
+         OR e.creator_id = $1
+         OR EXISTS (SELECT 1 FROM calendar_event_attendees ea WHERE ea.event_id = e.id AND ea.user_id = $1)
+         OR (e.department IS NOT NULL AND e.department = (SELECT department FROM users WHERE id = $1))
+         OR EXISTS (SELECT 1 FROM teams et WHERE et.id = e.team_id AND (et.leader_id = $1 OR EXISTS
+            (SELECT 1 FROM team_members etm WHERE etm.team_id = et.id AND etm.user_id = $1)))
+         OR EXISTS (SELECT 1 FROM projects ep WHERE ep.id = e.project_id AND ${projectScope('ep', '$1', '$2')})
       ORDER BY e.start_date ASC;
-    `);
+    `, [authUser.id, authUser.role]);
 
     const events = result.rows.map(r => {
       const sDate = r.start_date ? new Date(r.start_date) : null;
@@ -920,8 +1183,10 @@ async function handleCalendar(action, payload, authUser, res) {
       projectId,
       teamId,
       department,
-      attendees
+      attendees,
+      clientMutationId
     } = payload;
+    if (!isUuid(clientMutationId)) return sendError(res, 400, 'VALIDATION_ERROR', 'A valid mutation ID is required');
 
     // RBAC: Team Leader (project_manager) restrictions
     if (authUser.role === 'project_manager') {
@@ -958,24 +1223,22 @@ async function handleCalendar(action, payload, authUser, res) {
       startTimestamp = new Date();
     }
 
-    if (isNaN(startTimestamp.getTime())) {
-      startTimestamp = new Date();
-    }
+    if (isNaN(startTimestamp.getTime())) return sendError(res, 400, 'VALIDATION_ERROR', 'Event start date is invalid');
 
     let endTimestamp = endDate ? new Date(endDate) : new Date(startTimestamp.getTime() + 3600000);
-    if (isNaN(endTimestamp.getTime())) {
-      endTimestamp = new Date(startTimestamp.getTime() + 3600000);
-    }
+    if (isNaN(endTimestamp.getTime())) return sendError(res, 400, 'VALIDATION_ERROR', 'Event end date is invalid');
+    if (endTimestamp < startTimestamp) return sendError(res, 400, 'VALIDATION_ERROR', 'Event end must be after its start');
 
     const validTypes = ['meeting', 'milestone', 'deadline', 'team_event', 'company_event', 'reminder'];
     const eventType = validTypes.includes(type?.toLowerCase()) ? type.toLowerCase() : 'meeting';
 
     const result = await query(`
       INSERT INTO calendar_events (
-        title, description, type, start_date, end_date, location,
+        id, title, description, type, start_date, end_date, location,
         is_all_day, project_id, team_id, department, creator_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      VALUES ($12, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      ON CONFLICT (id) DO NOTHING
       RETURNING *;
     `, [
       title || 'Untitled Event',
@@ -988,10 +1251,28 @@ async function handleCalendar(action, payload, authUser, res) {
       projectId || null,
       teamId || null,
       department || null,
-      authUser.id
+      authUser.id,
+      clientMutationId
     ]);
 
-    const r = result.rows[0];
+    let r = result.rows[0];
+    if (!r) {
+      const existing = await query('SELECT * FROM calendar_events WHERE id = $1 AND creator_id = $2', [clientMutationId, authUser.id]);
+      r = existing.rows[0];
+      if (!r) return sendError(res, 409, 'IDEMPOTENCY_CONFLICT', 'Mutation ID is already in use');
+      const existingAttendees = await query('SELECT user_id FROM calendar_event_attendees WHERE event_id = $1', [r.id]);
+      const existingStart = new Date(r.start_date);
+      const existingEnd = new Date(r.end_date);
+      return sendSuccess(res, { event: {
+        id: r.id, title: r.title, description: r.description, type: r.type,
+        startDate: existingStart.toISOString(), endDate: existingEnd.toISOString(),
+        date: existingStart.toLocaleDateString('en-CA'),
+        time: existingStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
+        location: r.location, isAllDay: r.is_all_day, projectId: r.project_id,
+        teamId: r.team_id, department: r.department, creatorId: r.creator_id,
+        attendees: existingAttendees.rows.map(row => row.user_id)
+      } }, 'Event already created');
+    }
 
     // Store attendees
     const safeAttendees = Array.isArray(attendees) ? attendees : [];
@@ -1139,6 +1420,33 @@ async function handleCalendar(action, payload, authUser, res) {
       }
     }
 
+    const validTypes = ['meeting', 'milestone', 'deadline', 'team_event', 'company_event', 'reminder'];
+    if (type === 'company_event' && authUser.role !== 'admin') {
+      return sendError(res, 403, 'FORBIDDEN', 'Only administrators can create company-wide events');
+    }
+    const eventType = type == null
+      ? null
+      : (validTypes.includes(String(type).toLowerCase()) ? String(type).toLowerCase() : null);
+    if (type != null && !eventType) return sendError(res, 400, 'VALIDATION_ERROR', 'Unsupported event type');
+
+    const startTimestamp = startDate == null ? null : new Date(startDate);
+    const endTimestamp = endDate == null ? null : new Date(endDate);
+    if ((startTimestamp && Number.isNaN(startTimestamp.getTime())) || (endTimestamp && Number.isNaN(endTimestamp.getTime()))) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Event dates are invalid');
+    }
+    const effectiveStart = startTimestamp || new Date(prevEvent.start_date);
+    const effectiveEnd = endTimestamp || new Date(prevEvent.end_date);
+    if (effectiveEnd < effectiveStart) return sendError(res, 400, 'VALIDATION_ERROR', 'Event end must be after its start');
+
+    if (authUser.role === 'project_manager' && teamId && teamId !== prevEvent.team_id) {
+      const ledTeam = await query('SELECT 1 FROM teams WHERE id = $1 AND leader_id = $2', [teamId, authUser.id]);
+      if (!ledTeam.rows.length) return sendError(res, 403, 'FORBIDDEN', 'You can only move events to teams you lead');
+    }
+    if (authUser.role === 'project_manager' && projectId && projectId !== prevEvent.project_id) {
+      const managedProject = await query(`SELECT 1 FROM projects p WHERE p.id = $1 AND ${projectScope('p', '$2', '$3')}`, [projectId, authUser.id, authUser.role]);
+      if (!managedProject.rows.length) return sendError(res, 403, 'FORBIDDEN', 'You cannot move events to that project');
+    }
+
     const updateRes = await query(`
       UPDATE calendar_events
       SET title = COALESCE($2, title),
@@ -1148,9 +1456,9 @@ async function handleCalendar(action, payload, authUser, res) {
           end_date = COALESCE($6, end_date),
           location = COALESCE($7, location),
           is_all_day = COALESCE($8, is_all_day),
-          project_id = $9,
-          team_id = $10,
-          department = $11,
+          project_id = CASE WHEN $12 THEN $9 ELSE project_id END,
+          team_id = CASE WHEN $13 THEN $10 ELSE team_id END,
+          department = CASE WHEN $14 THEN $11 ELSE department END,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = $1
       RETURNING *;
@@ -1165,7 +1473,10 @@ async function handleCalendar(action, payload, authUser, res) {
       isAllDay,
       projectId || null,
       teamId || null,
-      department || null
+      department || null,
+      Object.hasOwn(payload, 'projectId'),
+      Object.hasOwn(payload, 'teamId'),
+      Object.hasOwn(payload, 'department')
     ]);
 
     const updatedEvent = updateRes.rows[0];
@@ -1392,30 +1703,27 @@ async function handleAnnouncements(action, payload, authUser, res) {
     if (authUser.role !== 'admin') {
       return sendError(res, 403, 'FORBIDDEN', 'Only Admin can publish announcements');
     }
-    const { title, content, tag, targetDepartment } = payload;
-    const result = await query(`
-      INSERT INTO announcements (title, content, tag, target_department, author_id)
-      VALUES ($1, $2, $3, $4, $5) RETURNING *;
-    `, [title, content || '', tag || 'General', targetDepartment || null, authUser.id]);
-
-    // Also broadcast notification to target users or all active users
-    let targetUsers = [];
-    if (targetDepartment) {
-      const uRes = await query(`SELECT id FROM users WHERE department = $1 AND status = 'Active';`, [targetDepartment]);
-      targetUsers = uRes.rows.map(r => r.id);
-    } else {
-      const uRes = await query(`SELECT id FROM users WHERE status = 'Active';`);
-      targetUsers = uRes.rows.map(r => r.id);
-    }
-
-    for (const uid of targetUsers) {
-      await query(`
+    const { title, content, tag, targetDepartment, clientMutationId } = payload;
+    if (!isUuid(clientMutationId)) return sendError(res, 400, 'VALIDATION_ERROR', 'A valid mutation ID is required');
+    if (typeof title !== 'string' || !title.trim()) return sendError(res, 400, 'VALIDATION_ERROR', 'Announcement title is required');
+    const saved = await transaction(async (client) => {
+      const result = await client.query(`
+        INSERT INTO announcements (id, title, content, tag, target_department, author_id)
+        VALUES ($6, $1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING RETURNING *;
+      `, [title.trim(), content || '', tag || 'General', targetDepartment || null, authUser.id, clientMutationId]);
+      if (!result.rows[0]) {
+        const existing = await client.query('SELECT * FROM announcements WHERE id = $1 AND author_id = $2', [clientMutationId, authUser.id]);
+        return { announcement: existing.rows[0], created: false };
+      }
+      await client.query(`
         INSERT INTO notifications (user_id, title, message, type, link)
-        VALUES ($1, $2, $3, 'announcement', '/messages');
-      `, [uid, `Company Announcement: ${title}`, content || title]);
-    }
-
-    return sendSuccess(res, { announcement: result.rows[0] }, 'Announcement published', 201);
+        SELECT id, $1, $2, 'announcement', '/messages' FROM users
+        WHERE status = 'Active' AND ($4::text IS NULL OR department = $4);
+      `, [`Company Announcement: ${title.trim()}`, content || title.trim(), null, targetDepartment]);
+      return { announcement: result.rows[0], created: true };
+    });
+    if (!saved.announcement) return sendError(res, 409, 'IDEMPOTENCY_CONFLICT', 'Mutation ID is already in use');
+    return sendSuccess(res, { announcement: saved.announcement }, saved.created ? 'Announcement published' : 'Announcement already published', saved.created ? 201 : 200);
   }
 
   if (action === 'delete') {
@@ -1636,10 +1944,11 @@ async function handleConversations(action, payload, authUser, res) {
   }
 
   if (action === 'create') {
-    const { conversationId, text, replyToId = null, title = null, priority = 'normal' } = payload;
+    const { conversationId, text, replyToId = null, title = null, priority = 'normal', clientMutationId } = payload;
     if (!conversationId || (!text?.trim() && !title?.trim())) {
       return sendError(res, 400, 'VALIDATION_ERROR', 'Conversation and message content are required');
     }
+    if (!isUuid(clientMutationId)) return sendError(res, 400, 'VALIDATION_ERROR', 'A valid mutation ID is required');
     const [conversationResult, membership, reply] = await Promise.all([
       query(`SELECT id, type, is_read_only FROM conversations WHERE id = $1;`, [conversationId]),
       query(`SELECT 1 FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2;`, [conversationId, authUser.id]),
@@ -1663,35 +1972,43 @@ async function handleConversations(action, payload, authUser, res) {
     }
     const announcement = conversation.type === 'announcements';
     const validPriority = ['normal', 'important', 'urgent'].includes(priority) ? priority : 'normal';
-    const inserted = await query(`
-      INSERT INTO messages (
-        conversation_id, sender_id, text, reply_to_id, title, priority, is_announcement
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING id, conversation_id AS "conversationId", sender_id AS "senderId",
-        text, reply_to_id AS "replyToId", is_edited AS edited, is_deleted AS deleted,
-        title, priority, is_announcement AS "isAnnouncement", created_at AS timestamp;
-    `, [conversationId, authUser.id, text || '', replyToId, announcement ? title : null, validPriority, announcement]);
-    const message = inserted.rows[0];
+    const message = await transaction(async (client) => {
+      const inserted = await client.query(`
+        INSERT INTO messages (
+          id, conversation_id, sender_id, text, reply_to_id, title, priority, is_announcement
+        ) VALUES ($8, $1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id, conversation_id AS "conversationId", sender_id AS "senderId",
+          text, reply_to_id AS "replyToId", is_edited AS edited, is_deleted AS deleted,
+          title, priority, is_announcement AS "isAnnouncement", created_at AS timestamp;
+      `, [conversationId, authUser.id, text || '', replyToId, announcement ? title : null, validPriority, announcement, clientMutationId]);
+      const wasInserted = Boolean(inserted.rows[0]);
+      const existing = wasInserted ? inserted : await client.query(`
+        SELECT id, conversation_id AS "conversationId", sender_id AS "senderId", text,
+          reply_to_id AS "replyToId", is_edited AS edited, is_deleted AS deleted,
+          title, priority, is_announcement AS "isAnnouncement", created_at AS timestamp
+        FROM messages WHERE id = $1 AND sender_id = $2 AND conversation_id = $3;
+      `, [clientMutationId, authUser.id, conversationId]);
+      const savedMessage = existing.rows[0];
+      if (!savedMessage) return null;
+      if (!wasInserted) return savedMessage;
+      await client.query(`
+        UPDATE conversations SET last_message = $1, last_message_at = CURRENT_TIMESTAMP WHERE id = $2;
+      `, [(title || text || '').slice(0, 200), conversationId]);
+      if (announcement) {
+        await client.query(`
+          INSERT INTO notifications (user_id, title, message, type, link)
+          SELECT cp.user_id, $3, $4, 'announcement'::notification_type, '/messages'
+          FROM conversation_participants cp
+          WHERE cp.conversation_id = $1 AND cp.user_id <> $2 AND cp.is_muted = false
+          ON CONFLICT DO NOTHING;
+        `, [conversationId, authUser.id, 'New Company Announcement', (title || text || '').slice(0, 200)]);
+      }
+      return savedMessage;
+    });
+    if (!message) return sendError(res, 409, 'IDEMPOTENCY_CONFLICT', 'Mutation ID is already in use');
     message.senderName = authUser.name;
     message.reactions = {};
-
-    // Update conversation metadata
-    await query(`
-      UPDATE conversations
-      SET last_message = $1, last_message_at = CURRENT_TIMESTAMP
-      WHERE id = $2;
-    `, [(title || text || '').slice(0, 200), conversationId]);
-
-    // Only create notifications for company announcements, NEVER for direct/group chat messages
-    if (announcement) {
-      await query(`
-        INSERT INTO notifications (user_id, title, message, type, link)
-        SELECT cp.user_id, $3, $4, 'announcement'::notification_type, '/messages'
-        FROM conversation_participants cp
-        WHERE cp.conversation_id = $1 AND cp.user_id <> $2 AND cp.is_muted = false
-        ON CONFLICT DO NOTHING;
-      `, [conversationId, authUser.id, 'New Company Announcement', (title || text || '').slice(0, 200)]);
-    }
 
     return sendSuccess(res, { message }, 'Message sent', 201);
   }
@@ -1796,25 +2113,29 @@ async function handleConversations(action, payload, authUser, res) {
       SELECT id, name FROM users WHERE id = $1 AND status != 'Inactive';
     `, [targetUserId]);
     if (!target.rows[0]) return sendError(res, 404, 'NOT_FOUND', 'User not found or inactive');
-    const existing = await query(`
-      SELECT c.id FROM conversations c
-      JOIN conversation_participants p1 ON p1.conversation_id = c.id AND p1.user_id = $1
-      JOIN conversation_participants p2 ON p2.conversation_id = c.id AND p2.user_id = $2
-      WHERE c.type = 'direct'
-        AND (SELECT COUNT(*) FROM conversation_participants p WHERE p.conversation_id = c.id) = 2
-      LIMIT 1;
-    `, [authUser.id, targetUserId]);
-    if (existing.rows[0]) return sendSuccess(res, { conversationId: existing.rows[0].id }, 'Direct conversation exists');
-
-    const created = await query(`
-      INSERT INTO conversations (name, type) VALUES ($1, 'direct') RETURNING id;
-    `, [`DM with ${target.rows[0].name}`]);
-    const conversationId = created.rows[0].id;
-    await query(`
-      INSERT INTO conversation_participants (conversation_id, user_id)
-      VALUES ($1, $2), ($1, $3) ON CONFLICT (conversation_id, user_id) DO NOTHING;
-    `, [conversationId, authUser.id, targetUserId]);
-    return sendSuccess(res, { conversationId }, 'Direct conversation created', 201);
+    const result = await transaction(async (client) => {
+      const pairKey = [authUser.id, targetUserId].sort().join(':');
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0));', [pairKey]);
+      const existing = await client.query(`
+        SELECT c.id FROM conversations c
+        JOIN conversation_participants p1 ON p1.conversation_id = c.id AND p1.user_id = $1
+        JOIN conversation_participants p2 ON p2.conversation_id = c.id AND p2.user_id = $2
+        WHERE c.type = 'direct'
+          AND (SELECT COUNT(*) FROM conversation_participants p WHERE p.conversation_id = c.id) = 2
+        LIMIT 1;
+      `, [authUser.id, targetUserId]);
+      if (existing.rows[0]) return { conversationId: existing.rows[0].id, created: false };
+      const created = await client.query(`
+        INSERT INTO conversations (name, type) VALUES ($1, 'direct') RETURNING id;
+      `, [`DM with ${target.rows[0].name}`]);
+      const conversationId = created.rows[0].id;
+      await client.query(`
+        INSERT INTO conversation_participants (conversation_id, user_id)
+        VALUES ($1, $2), ($1, $3) ON CONFLICT (conversation_id, user_id) DO NOTHING;
+      `, [conversationId, authUser.id, targetUserId]);
+      return { conversationId, created: true };
+    });
+    return sendSuccess(res, { conversationId: result.conversationId }, result.created ? 'Direct conversation created' : 'Direct conversation exists', result.created ? 201 : 200);
   }
 
   if (action === 'update-settings') {

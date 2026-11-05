@@ -7,6 +7,7 @@
 
 let inMemoryAccessToken = null;
 let activeRefreshPromise = null;
+const activeDataRequests = new Map();
 
 export function setAccessToken(token) {
   inMemoryAccessToken = token;
@@ -42,6 +43,7 @@ export async function apiRequest(endpoint, options = {}, isRetry = false) {
     ...options,
     headers,
     credentials: 'include', // Send and receive HttpOnly cookies
+    signal: options.signal || AbortSignal.timeout(20000),
   };
 
   let response = await fetch(url, config);
@@ -110,7 +112,7 @@ export async function attemptSilentRefresh() {
       }
       clearAccessToken();
       return null;
-    } catch (err) {
+    } catch  {
       clearAccessToken();
       return null;
     } finally {
@@ -177,11 +179,20 @@ export const AuthAPI = {
 
 // Unified Data Gateway Helper
 async function dataRequest(entity, action, payload = {}) {
-  const res = await apiRequest('/api/v1/data', {
+  const requestPayload = action === 'create' && !payload.clientMutationId
+    ? { ...payload, clientMutationId: crypto.randomUUID() }
+    : payload;
+  const isRead = action === 'list' || action === 'get' || action === 'sync' || action === 'delete-summary';
+  const requestKey = isRead ? JSON.stringify([entity, action, requestPayload]) : null;
+  if (requestKey && activeDataRequests.has(requestKey)) return activeDataRequests.get(requestKey);
+  const request = apiRequest('/api/v1/data', {
     method: 'POST',
-    body: JSON.stringify({ entity, action, payload })
+    body: JSON.stringify({ entity, action, payload: requestPayload })
+  }).then(res => res.data).finally(() => {
+    if (requestKey) activeDataRequests.delete(requestKey);
   });
-  return res.data;
+  if (requestKey) activeDataRequests.set(requestKey, request);
+  return request;
 }
 
 export const DataAPI = {

@@ -2,25 +2,18 @@ import React, { useMemo, useState } from 'react';
 import {
   Users2,
   FolderKanban,
-  CheckCircle2,
   Clock,
-  AlertTriangle,
   ArrowRight,
   Plus,
-  Calendar,
-  MessageSquare,
   ListTodo,
   CheckSquare
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import { getInitials } from '../utils/avatar';
 import { useNavigate } from 'react-router-dom';
+import { asDate } from '../utils/dateHelpers';
 import {
   ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
   Tooltip,
   PieChart,
   Pie,
@@ -83,7 +76,7 @@ export default function TeamLeaderDashboard() {
   // Counters
   const completedTasks = scopedTasks.filter(t => t.status === 'Completed').length;
   const pendingTasks = scopedTasks.filter(t => t.status !== 'Completed').length;
-  const overdueTasks = scopedTasks.filter(t => t.status !== 'Completed' && t.dueDate && new Date(t.dueDate) < new Date()).length;
+  const overdueTasks = scopedTasks.filter(t => t.status !== 'Completed' && t.dueDate && asDate(t.dueDate) < asDate()).length;
 
   // Task Status Distribution Chart Data
   const statusChartData = useMemo(() => {
@@ -103,7 +96,7 @@ export default function TeamLeaderDashboard() {
       const total = memberTasks.length;
       const done = memberTasks.filter(t => t.status === 'Completed').length;
       const inProg = memberTasks.filter(t => t.status === 'In Progress').length;
-      const overdue = memberTasks.filter(t => t.status !== 'Completed' && t.dueDate && new Date(t.dueDate) < new Date()).length;
+      const overdue = memberTasks.filter(t => t.status !== 'Completed' && t.dueDate && asDate(t.dueDate) < asDate()).length;
       return {
         member,
         total,
@@ -120,7 +113,7 @@ export default function TeamLeaderDashboard() {
       if (taskFilter === 'TODO') return t.status === 'To Do' || t.status === 'Backlog';
       if (taskFilter === 'IN_PROGRESS') return t.status === 'In Progress' || t.status === 'In Review';
       if (taskFilter === 'COMPLETED') return t.status === 'Completed';
-      if (taskFilter === 'OVERDUE') return t.status !== 'Completed' && t.dueDate && new Date(t.dueDate) < new Date();
+      if (taskFilter === 'OVERDUE') return t.status !== 'Completed' && t.dueDate && asDate(t.dueDate) < asDate();
       return true;
     });
   }, [scopedTasks, taskFilter]);
@@ -152,10 +145,10 @@ export default function TeamLeaderDashboard() {
         });
       }
     });
-    return items.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate)).slice(0, 8);
+    return items.sort((a, b) => asDate(a.dueDate) - asDate(b.dueDate)).slice(0, 8);
   }, [managedProjects, scopedTasks]);
 
-  const todayStr = new Date().toLocaleDateString('en-US', {
+  const todayStr = asDate().toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'short',
     day: 'numeric',
@@ -269,7 +262,7 @@ export default function TeamLeaderDashboard() {
                         <div>
                           <h4 className="text-xs font-bold text-[var(--text-main)]">{p.name}</h4>
                           <p className="text-[10px] text-[var(--text-sec)] mt-0.5">
-                            Due {p.dueDate ? new Date(p.dueDate).toLocaleDateString() : 'TBD'} • {pTasks.length} tasks ({pDone} done)
+                            Due {p.dueDate ? asDate(p.dueDate).toLocaleDateString() : 'TBD'} • {pTasks.length} tasks ({pDone} done)
                           </p>
                         </div>
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
@@ -400,7 +393,7 @@ export default function TeamLeaderDashboard() {
                 filteredTasks.slice(0, 8).map(task => {
                   const proj = projects.find(p => p.id === task.projectId);
                   const assignee = users.find(u => u.id === task.assigneeId);
-                  const isOverdue = task.status !== 'Completed' && task.dueDate && new Date(task.dueDate) < new Date();
+                  const isOverdue = task.status !== 'Completed' && task.dueDate && asDate(task.dueDate) < asDate();
 
                   return (
                     <tr
@@ -428,7 +421,7 @@ export default function TeamLeaderDashboard() {
                         <span className="text-[10px] font-semibold text-[var(--text-sec)]">{task.status}</span>
                       </td>
                       <td className={`py-2.5 px-3 font-medium ${isOverdue ? 'text-red-600 font-bold' : 'text-[var(--text-sec)]'}`}>
-                        {task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'None'}
+                        {task.dueDate ? asDate(task.dueDate).toLocaleDateString() : 'None'}
                       </td>
                     </tr>
                   );
@@ -510,7 +503,7 @@ export default function TeamLeaderDashboard() {
             ) : (
               <div className="space-y-2.5">
                 {upcomingDeadlines.map(d => {
-                  const isOver = new Date(d.dueDate) < new Date();
+                  const isOver = asDate(d.dueDate) < asDate();
                   return (
                     <div
                       key={d.id}
@@ -525,7 +518,7 @@ export default function TeamLeaderDashboard() {
                         <h4 className="text-xs font-bold text-[var(--text-main)] truncate mt-1">{d.title}</h4>
                       </div>
                       <span className={`text-[10px] font-bold whitespace-nowrap ml-2 ${isOver ? 'text-red-500' : 'text-[var(--text-sec)]'}`}>
-                        {new Date(d.dueDate).toLocaleDateString()}
+                        {asDate(d.dueDate).toLocaleDateString()}
                       </span>
                     </div>
                   );

@@ -1,31 +1,19 @@
 /** Neon-backed messaging state and actions. */
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { useApp } from './AppContext';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useApp } from './useApp';
 import { ConversationsAPI } from '../services/api';
 import { autoSyncBus, SYNC_EVENTS } from '../services/autoSync';
 import { playMessageChime } from '../utils/soundEffects';
 
-const MessagingContext = createContext(null);
-
-const CACHE_KEY_PREFIX = 'nx_msg_cache_';
+import { MessagingContext } from './messagingContextValue';
 
 function getCache(userId) {
-  if (!userId) return null;
-  try {
-    const raw = localStorage.getItem(`${CACHE_KEY_PREFIX}${userId}`);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+  void userId;
+  return null;
 }
-
 function saveCache(userId, data) {
-  if (!userId) return;
-  try {
-    localStorage.setItem(`${CACHE_KEY_PREFIX}${userId}`, JSON.stringify(data));
-  } catch (e) {
-    console.warn('[MESSAGING] Failed to cache messages locally:', e);
-  }
+  void userId;
+  void data;
 }
 
 export function MessagingProvider({ children }) {
@@ -51,7 +39,7 @@ export function MessagingProvider({ children }) {
     if (!currentUser) return null;
     if (fetching.current) return null;
     fetching.current = true;
-    if (!silent && mounted.current && Object.keys(conversations).length === 0) setLoading(true);
+    if (!silent && mounted.current) setLoading(true);
     try {
       const data = await ConversationsAPI.getAll();
       if (!data || !mounted.current) return data;
@@ -114,10 +102,13 @@ export function MessagingProvider({ children }) {
       messagesBaselineEstablishedRef.current = false;
       fetchConversations().catch(() => { });
     } else {
-      setConversations({});
-      setMessages({});
-      setSettings({});
-      setLoading(false);
+      queueMicrotask(() => {
+        if (!mounted.current) return;
+        setConversations({});
+        setMessages({});
+        setSettings({});
+        setLoading(false);
+      });
       knownMessageIdsRef.current = new Set();
       messagesBaselineEstablishedRef.current = false;
     }
@@ -208,7 +199,7 @@ export function MessagingProvider({ children }) {
     const poll = () => {
       if (document.visibilityState === 'visible' && navigator.onLine) syncMessages();
     };
-    const timer = window.setInterval(poll, 4000);
+    const timer = window.setInterval(poll, 15000);
     const onVisible = () => {
       if (document.visibilityState === 'visible' && navigator.onLine) syncMessages();
     };
@@ -419,10 +410,4 @@ export function MessagingProvider({ children }) {
     getConversationsForUser, getMessages, getUnreadCount, getUserSetting, getLastMessage,
   };
   return <MessagingContext.Provider value={value}>{children}</MessagingContext.Provider>;
-}
-
-export function useMessaging() {
-  const context = useContext(MessagingContext);
-  if (!context) throw new Error('useMessaging must be used within MessagingProvider');
-  return context;
 }

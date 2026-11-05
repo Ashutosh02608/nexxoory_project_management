@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   FolderKanban,
   CheckCircle2,
@@ -9,10 +9,25 @@ import {
   ArrowRight,
   Layers,
   Calendar,
-  Filter,
   X
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
+import { asDate } from '../utils/dateHelpers';
+
+function CustomBarTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null;
+  const data = payload[0].payload;
+  return (
+    <div className="bg-[var(--surface)] border border-[var(--border)] p-3 rounded-xl shadow-xl text-xs space-y-1">
+      <p className="font-bold text-[var(--text-main)]">{data.fullName}</p>
+      <p className="text-[var(--text-sec)]">Status: <span className="font-semibold text-[var(--text-main)]">{data.status}</span></p>
+      <p className="text-[#635BFF] font-bold">Progress: {data.progress}%</p>
+      <p className="text-[var(--text-sec)]">Tasks: {data.completedTasks} / {data.totalTasks} completed</p>
+      <p className="text-[10px] text-[var(--text-sec)]">Due: {data.dueDate}</p>
+      <p className="text-[10px] text-[#635BFF] font-semibold pt-1 border-t border-[var(--border)]">Click to open project →</p>
+    </div>
+  );
+}
 import {
   ResponsiveContainer,
   BarChart,
@@ -38,10 +53,10 @@ export default function AdminDashboardPage() {
   const [selectedTaskStatus, setSelectedTaskStatus] = useState(null); // Filter task views by clicking donut or legend
 
   // Date-range evaluation helper
-  const now = useMemo(() => new Date(), []);
-  const filterByDateRange = (itemDateStr) => {
+  const now = useMemo(() => asDate(), []);
+  const filterByDateRange = useCallback((itemDateStr) => {
     if (!itemDateStr || dateRange === 'ALL') return true;
-    const itemDate = new Date(itemDateStr);
+    const itemDate = asDate(itemDateStr);
     if (isNaN(itemDate.getTime())) return true;
     const diffTime = now.getTime() - itemDate.getTime();
     const diffDays = diffTime / (1000 * 3600 * 24);
@@ -60,7 +75,7 @@ export default function AdminDashboardPage() {
       default:
         return true;
     }
-  };
+  }, [dateRange, now]);
 
   // Scoped & Filtered Projects
   const filteredProjects = useMemo(() => {
@@ -70,18 +85,18 @@ export default function AdminDashboardPage() {
       const matchesTeam = projectTeamFilter === 'ALL' || p.teamId === projectTeamFilter;
       return matchesDate && matchesStatus && matchesTeam;
     });
-  }, [projects, dateRange, projectStatusFilter, projectTeamFilter]);
+  }, [projects, projectStatusFilter, projectTeamFilter, filterByDateRange]);
 
   // Scoped & Filtered Tasks
   const filteredTasks = useMemo(() => {
     return tasks.filter(t => filterByDateRange(t.createdAt || t.startDate));
-  }, [tasks, dateRange]);
+  }, [tasks, filterByDateRange]);
 
   // DERIVED DYNAMIC METRICS FROM REAL DATASETS
   const totalProjects = filteredProjects.length;
   const activeProjects = filteredProjects.filter(p => p.status === 'In Progress' || p.status === 'Planning').length;
   const completedProjects = filteredProjects.filter(p => p.status === 'Completed').length;
-  const overdueProjects = filteredProjects.filter(p => p.status === 'Overdue' || (p.dueDate && new Date(p.dueDate) < now && p.status !== 'Completed')).length;
+  const overdueProjects = filteredProjects.filter(p => p.status === 'Overdue' || (p.dueDate && asDate(p.dueDate) < now && p.status !== 'Completed')).length;
   const totalEmployees = users.length;
   const activeTeams = teams.length;
 
@@ -129,14 +144,14 @@ export default function AdminDashboardPage() {
         status: p.status,
         totalTasks: pTasks.length,
         completedTasks: pTasks.filter(t => t.status === 'Completed').length,
-        dueDate: p.dueDate ? new Date(p.dueDate).toLocaleDateString() : 'N/A'
+        dueDate: p.dueDate ? asDate(p.dueDate).toLocaleDateString() : 'N/A'
       };
     });
   }, [filteredProjects, tasks]);
 
   // Overdue Tasks
   const overdueTasks = useMemo(() => {
-    return filteredTasks.filter(t => t.status !== 'Completed' && t.dueDate && new Date(t.dueDate) < now);
+    return filteredTasks.filter(t => t.status !== 'Completed' && t.dueDate && asDate(t.dueDate) < now);
   }, [filteredTasks, now]);
 
   // Active status filtered tasks for interactive detail list
@@ -144,24 +159,6 @@ export default function AdminDashboardPage() {
     if (!selectedTaskStatus) return [];
     return filteredTasks.filter(t => t.status === selectedTaskStatus);
   }, [filteredTasks, selectedTaskStatus]);
-
-  // Custom Chart Tooltip
-  const CustomBarTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      return (
-        <div className="bg-[var(--surface)] border border-[var(--border)] p-3 rounded-xl shadow-xl text-xs space-y-1">
-          <p className="font-bold text-[var(--text-main)]">{data.fullName}</p>
-          <p className="text-[var(--text-sec)]">Status: <span className="font-semibold text-[var(--text-main)]">{data.status}</span></p>
-          <p className="text-[#635BFF] font-bold">Progress: {data.progress}%</p>
-          <p className="text-[var(--text-sec)]">Tasks: {data.completedTasks} / {data.totalTasks} completed</p>
-          <p className="text-[10px] text-[var(--text-sec)]">Due: {data.dueDate}</p>
-          <p className="text-[10px] text-[#635BFF] font-semibold pt-1 border-t border-[var(--border)]">Click to open project →</p>
-        </div>
-      );
-    }
-    return null;
-  };
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -551,7 +548,7 @@ export default function AdminDashboardPage() {
                           </div>
                         </td>
                         <td className="py-3 text-[var(--text-sec)]">
-                          {p.dueDate ? new Date(p.dueDate).toLocaleDateString() : 'N/A'}
+                          {p.dueDate ? asDate(p.dueDate).toLocaleDateString() : 'N/A'}
                         </td>
                       </tr>
                     );

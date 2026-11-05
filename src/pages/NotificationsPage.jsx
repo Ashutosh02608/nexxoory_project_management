@@ -1,12 +1,11 @@
 import React, { useState, useMemo } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import {
   Bell,
   CheckCircle2,
   Trash2,
   Clock,
   Check,
-  Filter,
   ArrowRight,
   FolderKanban,
   ListTodo,
@@ -15,7 +14,7 @@ import {
   CalendarDays,
   Inbox
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 
 export default function NotificationsPage() {
   const { notifications = [], markNotificationRead, markAllNotificationsRead, removeNotification, currentUser } = useApp();

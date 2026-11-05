@@ -119,12 +119,13 @@ class AutoSyncBus {
       if (this.channel) {
         try {
           this.channel.postMessage(payload);
+          return;
         } catch (e) {
           console.warn('[AUTO_SYNC] BroadcastChannel send failed:', e);
         }
       }
 
-      // Storage event backup
+      // Storage fallback when the channel is unavailable or sending fails.
       try {
         localStorage.setItem(STORAGE_SYNC_KEY, JSON.stringify(payload));
       } catch {

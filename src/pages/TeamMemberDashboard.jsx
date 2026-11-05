@@ -1,20 +1,16 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import {
   CheckSquare,
   FolderKanban,
-  CheckCircle2,
   Clock,
-  AlertTriangle,
   ArrowRight,
-  ListTodo,
   Calendar,
-  FileText,
-  MessageSquare,
   PlayCircle
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import { ScopeRules } from '../config/rbac';
 import { useNavigate } from 'react-router-dom';
+import { asDate } from '../utils/dateHelpers';
 import {
   ResponsiveContainer,
   PieChart,
@@ -46,16 +42,11 @@ export default function TeamMemberDashboard() {
     return ScopeRules.filterTasks(tasks, currentUser, teams, myProjects);
   }, [tasks, currentUser, teams, myProjects]);
 
-  // Tasks assigned directly to currentUser
-  const myDirectTasks = useMemo(() => {
-    return myTasks.filter(t => t.assigneeId === currentUser?.id);
-  }, [myTasks, currentUser?.id]);
-
   // Counters for personal work
   const completedTasks = myTasks.filter(t => t.status === 'Completed').length;
   const inProgressTasks = myTasks.filter(t => t.status === 'In Progress' || t.status === 'In Review').length;
   const todoTasks = myTasks.filter(t => t.status === 'To Do' || t.status === 'Backlog').length;
-  const overdueTasks = myTasks.filter(t => t.status !== 'Completed' && t.dueDate && new Date(t.dueDate) < new Date()).length;
+  const overdueTasks = myTasks.filter(t => t.status !== 'Completed' && t.dueDate && asDate(t.dueDate) < asDate()).length;
 
   // Personal Task Status Distribution for Donut Chart
   const statusChartData = useMemo(() => {
@@ -69,13 +60,13 @@ export default function TeamMemberDashboard() {
 
   // Today's Work: Overdue or Due within 48h or In Progress
   const todayTasks = useMemo(() => {
-    const now = new Date();
-    const inTwoDays = new Date(now.getTime() + 2 * 86400000);
+    const now = asDate();
+    const inTwoDays = asDate(now.getTime() + 2 * 86400000);
     return myTasks.filter(t => {
       if (t.status === 'Completed') return false;
       if (t.status === 'In Progress') return true;
       if (t.dueDate) {
-        const d = new Date(t.dueDate);
+        const d = asDate(t.dueDate);
         return d <= inTwoDays;
       }
       return false;
@@ -86,7 +77,7 @@ export default function TeamMemberDashboard() {
   const upcomingDeadlines = useMemo(() => {
     return myTasks
       .filter(t => t.dueDate && t.status !== 'Completed')
-      .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
+      .sort((a, b) => asDate(a.dueDate) - asDate(b.dueDate))
       .slice(0, 6);
   }, [myTasks]);
 
@@ -102,7 +93,7 @@ export default function TeamMemberDashboard() {
     }
   };
 
-  const todayStr = new Date().toLocaleDateString('en-US', {
+  const todayStr = asDate().toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'short',
     day: 'numeric',
@@ -126,7 +117,7 @@ export default function TeamMemberDashboard() {
         {/* Quick Action Navigation */}
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={() => navigate('/my-work')}
+            onClick={() => navigate('/tasks')}
             className="flex items-center gap-1.5 px-3 py-2 bg-[#1E6091] hover:bg-[#143A52] text-white text-xs font-semibold rounded-xl shadow-xs cursor-pointer transition-colors"
           >
             <CheckSquare className="w-3.5 h-3.5" />
@@ -183,7 +174,7 @@ export default function TeamMemberDashboard() {
               <h3 className="text-sm font-bold text-[var(--text-main)]">Today's Focus & Urgent Tasks</h3>
             </div>
             <button
-              onClick={() => navigate('/my-work')}
+              onClick={() => navigate('/tasks')}
               className="text-xs font-semibold text-[#1E6091] hover:underline flex items-center gap-1 cursor-pointer"
             >
               Open Workspace <ArrowRight className="w-3 h-3" />
@@ -198,7 +189,7 @@ export default function TeamMemberDashboard() {
             <div className="space-y-3">
               {todayTasks.map(t => {
                 const proj = projects.find(p => p.id === t.projectId);
-                const isOverdue = t.dueDate && new Date(t.dueDate) < new Date();
+                const isOverdue = t.dueDate && asDate(t.dueDate) < asDate();
 
                 return (
                   <div
@@ -218,7 +209,7 @@ export default function TeamMemberDashboard() {
                       </div>
                       <h4 className="text-xs font-bold text-[var(--text-main)] truncate mt-1">{t.title}</h4>
                       <p className={`text-[10px] mt-0.5 ${isOverdue ? 'text-red-500 font-bold' : 'text-[var(--text-sec)]'}`}>
-                        Due: {t.dueDate ? new Date(t.dueDate).toLocaleDateString() : 'No date'}
+                        Due: {t.dueDate ? asDate(t.dueDate).toLocaleDateString() : 'No date'}
                       </p>
                     </div>
 
@@ -335,7 +326,7 @@ export default function TeamMemberDashboard() {
                           {p.status}
                         </span>
                         <span className="text-[10px] text-[var(--text-sec)]">
-                          Due {p.dueDate ? new Date(p.dueDate).toLocaleDateString() : 'TBD'}
+                          Due {p.dueDate ? asDate(p.dueDate).toLocaleDateString() : 'TBD'}
                         </span>
                       </div>
                       <h4 className="text-xs font-bold text-[var(--text-main)]">{p.name}</h4>
@@ -373,7 +364,7 @@ export default function TeamMemberDashboard() {
             ) : (
               <div className="space-y-2.5">
                 {upcomingDeadlines.map(d => {
-                  const isOver = new Date(d.dueDate) < new Date();
+                  const isOver = asDate(d.dueDate) < asDate();
                   return (
                     <div
                       key={d.id}
@@ -384,7 +375,7 @@ export default function TeamMemberDashboard() {
                         <span className="text-[10px] text-[var(--text-sec)]">{d.status}</span>
                       </div>
                       <span className={`text-[10px] font-bold whitespace-nowrap ml-2 ${isOver ? 'text-red-500' : 'text-[var(--text-sec)]'}`}>
-                        {new Date(d.dueDate).toLocaleDateString()}
+                        {asDate(d.dueDate).toLocaleDateString()}
                       </span>
                     </div>
                   );

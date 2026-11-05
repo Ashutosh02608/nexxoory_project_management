@@ -1,4 +1,4 @@
-import React, { createContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   AuthAPI,
   DataAPI,
@@ -10,35 +10,24 @@ import {
   CalendarAPI,
   NotificationsAPI,
   AnnouncementsAPI,
-  ConversationsAPI,
   attemptSilentRefresh,
   clearAccessToken
 } from '../services/api';
 import { autoSyncBus, SYNC_EVENTS } from '../services/autoSync';
 import { playNotificationChime } from '../utils/soundEffects';
+import { AppContext } from './appContextValue';
 
-const CACHE_KEY_PREFIX = 'nx_app_data_cache_';
-
-function getAppCache(userId) {
-  if (!userId) return null;
-  try {
-    const raw = localStorage.getItem(`${CACHE_KEY_PREFIX}${userId}`);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
+for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+  const key = localStorage.key(index);
+  if (key?.startsWith('nx_app_data_cache_') || key?.startsWith('nx_msg_cache_')) {
+    localStorage.removeItem(key);
   }
 }
 
 function saveAppCache(userId, data) {
-  if (!userId || !data) return;
-  try {
-    localStorage.setItem(`${CACHE_KEY_PREFIX}${userId}`, JSON.stringify(data));
-  } catch (e) {
-    console.warn('[APP] Failed to cache state locally:', e);
-  }
+  void userId;
+  void data;
 }
-
-export const AppContext = createContext();
 
 export function AppProvider({ children }) {
   const [theme, setThemeState] = useState(() => localStorage.getItem('nx_theme') || 'light');
@@ -336,7 +325,7 @@ export function AppProvider({ children }) {
       } else {
         setCurrentUser(null);
       }
-    } catch (err) {
+    } catch  {
       setCurrentUser(null);
     } finally {
       setIsAuthLoading(false);
@@ -344,37 +333,22 @@ export function AppProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    restoreSession();
+    void Promise.resolve().then(restoreSession);
   }, [restoreSession]);
 
   useEffect(() => {
     if (currentUser) {
-      // Instant cache hydration for current user to remove UI wait delay
-      const cached = getAppCache(currentUser.id);
-      if (cached) {
-        if (cached.users) setUsers(cached.users);
-        if (cached.teams) setTeams(cached.teams);
-        if (cached.projects) setProjects(cached.projects);
-        if (cached.tasks) setTasks(cached.tasks);
-        if (cached.documents) setDocuments(cached.documents);
-        if (cached.folderPermissions) setFolderPermissions(cached.folderPermissions);
-        if (cached.events) setEvents(cached.events);
-        if (cached.notifications) setNotifications(cached.notifications);
-        if (cached.announcements) setAnnouncements(cached.announcements);
-        if (cached.conversations) setConversations(cached.conversations);
-      }
-
       // Reset notification tracking baseline when user switches
       knownNotificationIdsRef.current = new Set();
       notifBaselineEstablishedRef.current = false;
-      refreshAppData(Boolean(cached));
+      void Promise.resolve().then(() => refreshAppData(false));
 
-      // Background fallback synchronization scheduler (every 6 seconds, event bus handles instant updates)
+      // Low-frequency fallback. Local mutations use the event bus.
       const syncInterval = setInterval(() => {
         if (document.visibilityState === 'visible' && navigator.onLine) {
           refreshAppData(true);
         }
-      }, 6000);
+      }, 30000);
 
       const handleVisibilityChange = () => {
         if (document.visibilityState === 'visible' && navigator.onLine) {
@@ -388,14 +362,16 @@ export function AppProvider({ children }) {
         document.removeEventListener('visibilitychange', handleVisibilityChange);
       };
     } else {
-      setUsers([]);
-      setTeams([]);
-      setProjects([]);
-      setTasks([]);
-      setDocuments([]);
-      setEvents([]);
-      setNotifications([]);
-      setConversations([]);
+      queueMicrotask(() => {
+        setUsers([]);
+        setTeams([]);
+        setProjects([]);
+        setTasks([]);
+        setDocuments([]);
+        setEvents([]);
+        setNotifications([]);
+        setConversations([]);
+      });
     }
   }, [currentUser, refreshAppData]);
 
@@ -811,5 +787,3 @@ export function AppProvider({ children }) {
     </AppContext.Provider>
   );
 };
-
-export { useApp } from './useApp';

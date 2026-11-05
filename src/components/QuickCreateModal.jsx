@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { X, FolderKanban, ListTodo, Users, Megaphone, Loader2 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import { DEPARTMENTS, DEFAULT_DEPARTMENT } from '../constants/departments';
 
 export default function QuickCreateModal() {
@@ -17,6 +17,7 @@ export default function QuickCreateModal() {
   } = useApp();
 
   const [tab, setTab] = useState('task'); // 'task', 'project', 'team', 'announcement'
+  const submittingRef = useRef(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -54,6 +55,8 @@ export default function QuickCreateModal() {
   const handleCreateTask = async (e) => {
     e.preventDefault();
     if (!taskTitle) return;
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setIsSubmitting(true);
     setErrorMsg('');
     try {
@@ -75,6 +78,7 @@ export default function QuickCreateModal() {
     } catch (err) {
       setErrorMsg(err.message || 'Failed to create task');
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -82,6 +86,8 @@ export default function QuickCreateModal() {
   const handleCreateProject = async (e) => {
     e.preventDefault();
     if (!projName) return;
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setIsSubmitting(true);
     setErrorMsg('');
     try {
@@ -105,6 +111,7 @@ export default function QuickCreateModal() {
     } catch (err) {
       setErrorMsg(err.message || 'Failed to create project');
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -112,6 +119,8 @@ export default function QuickCreateModal() {
   const handleCreateTeam = async (e) => {
     e.preventDefault();
     if (!teamName) return;
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setIsSubmitting(true);
     setErrorMsg('');
     try {
@@ -128,6 +137,7 @@ export default function QuickCreateModal() {
     } catch (err) {
       setErrorMsg(err.message || 'Failed to create team');
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -135,6 +145,8 @@ export default function QuickCreateModal() {
   const handleCreateAnnouncement = async (e) => {
     e.preventDefault();
     if (!annTitle) return;
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setIsSubmitting(true);
     setErrorMsg('');
     try {
@@ -150,6 +162,7 @@ export default function QuickCreateModal() {
     } catch (err) {
       setErrorMsg(err.message || 'Failed to publish announcement');
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };

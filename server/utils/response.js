@@ -1,6 +1,21 @@
 import { env } from '../config/env.js';
+import crypto from 'crypto';
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  try {
+    const parsed = new URL(origin);
+    return [env.FRONTEND_URL, ...env.ALLOWED_ORIGINS].some((allowed) => {
+      const allowedUrl = new URL(allowed);
+      return parsed.origin === allowedUrl.origin;
+    });
+  } catch {
+    return false;
+  }
+}
 
 export function sendJson(res, statusCode, body, headers = {}) {
+  if (!res.getHeader?.('X-Request-Id')) res.setHeader('X-Request-Id', crypto.randomUUID());
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json');
   for (const [k, v] of Object.entries(headers)) {
@@ -32,19 +47,10 @@ export function handleCors(req, res) {
   
   // Whitelist resolution:
   // Allow same-origin, Vercel deployments (*.vercel.app), localhost, or configured FRONTEND_URL/ALLOWED_ORIGINS
-  let isAllowedOrigin = false;
-  if (!origin) {
-    isAllowedOrigin = true;
-  } else if (origin === env.FRONTEND_URL || env.ALLOWED_ORIGINS.includes(origin)) {
-    isAllowedOrigin = true;
-  } else if (origin.endsWith('.vercel.app')) {
-    isAllowedOrigin = true;
-  } else if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
-    isAllowedOrigin = true;
-  }
+  const allowedOrigin = isAllowedOrigin(origin);
 
   // Reject unauthorized origins for state-changing requests
-  if (origin && !isAllowedOrigin) {
+  if (origin && !allowedOrigin) {
     res.statusCode = 403;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ success: false, error: { code: 'FORBIDDEN_ORIGIN', message: 'CORS policy violation: unauthorized origin' } }));
@@ -52,7 +58,7 @@ export function handleCors(req, res) {
   }
 
   // Set credentialed CORS headers when origin is authorized
-  if (origin && isAllowedOrigin) {
+  if (origin && allowedOrigin) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
@@ -85,16 +91,7 @@ export function validateCsrf(req, res) {
 
   const origin = req.headers.origin;
   if (origin) {
-    let isAllowed = false;
-    if (origin === env.FRONTEND_URL || env.ALLOWED_ORIGINS.includes(origin)) {
-      isAllowed = true;
-    } else if (origin.endsWith('.vercel.app')) {
-      isAllowed = true;
-    } else if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
-      isAllowed = true;
-    }
-
-    if (!isAllowed) {
+    if (!isAllowedOrigin(origin)) {
       sendError(res, 403, 'CSRF_ORIGIN_INVALID', 'Cross-origin request rejected');
       return false;
     }
@@ -119,7 +116,7 @@ export async function parseJsonBody(req) {
     req.on('end', () => {
       try {
         resolve(raw ? JSON.parse(raw) : {});
-      } catch (err) {
+      } catch  {
         reject(new Error('Invalid JSON format'));
       }
     });

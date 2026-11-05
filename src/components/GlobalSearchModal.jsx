@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Search, X, FolderKanban, ListTodo, UserCircle2, ArrowRight } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import { getInitials } from '../utils/avatar';
 import { useNavigate } from 'react-router-dom';
 

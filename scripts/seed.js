@@ -24,7 +24,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import argon2 from 'argon2';
-import { getDbPool, closePool, transaction } from '../server/config/db.js';
+import { closePool, transaction } from '../server/config/db.js';
 import {
   INITIAL_USERS,
   INITIAL_TEAMS,
@@ -193,7 +193,6 @@ export async function seedDatabase() {
     parallelism: 1
   });
 
-  const pool = getDbPool();
   const cleanupConflicts = [];
 
   try {

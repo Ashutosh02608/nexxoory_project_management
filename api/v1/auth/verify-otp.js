@@ -45,7 +45,7 @@ export default async function handler(req, res) {
     if (err.message === 'OTP_EXPIRED') {
       return sendError(res, 400, 'OTP_EXPIRED', 'The OTP has expired. Please request a new code.');
     }
-    console.error('Verify OTP Error:', err);
+    console.error('[VERIFY OTP API ERROR]', err.name, err.code);
     return sendError(res, 500, 'SERVER_ERROR', 'An error occurred during verification');
   }
 }

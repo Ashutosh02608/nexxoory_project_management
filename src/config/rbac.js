@@ -5,7 +5,6 @@
 
 import {
   LayoutDashboard,
-  CheckSquare,
   FolderKanban,
   ListTodo,
   Users2,
@@ -55,7 +54,6 @@ export const ROLE_NAVIGATION = {
   ],
   [ROLES.TEAM_MEMBER]: [
     { label: 'Dashboard', path: '/', icon: LayoutDashboard },
-    { label: 'My Work', path: '/my-work', icon: CheckSquare },
     { label: 'My Projects', path: '/projects', icon: FolderKanban },
     { label: 'My Tasks', path: '/tasks', icon: ListTodo },
     { label: 'Calendar', path: '/calendar', icon: CalendarDays },
@@ -71,7 +69,6 @@ export const ROLE_NAVIGATION = {
  */
 export const ROUTE_PERMISSIONS = {
   '/': [ROLES.ADMIN, ROLES.PROJECT_MANAGER, ROLES.TEAM_MEMBER],
-  '/my-work': [ROLES.TEAM_MEMBER],
   '/projects': [ROLES.ADMIN, ROLES.PROJECT_MANAGER, ROLES.TEAM_MEMBER],
   '/tasks': [ROLES.ADMIN, ROLES.PROJECT_MANAGER, ROLES.TEAM_MEMBER],
   '/teams': [ROLES.ADMIN, ROLES.PROJECT_MANAGER],

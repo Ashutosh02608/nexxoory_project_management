@@ -7,14 +7,13 @@ import {
   Sun,
   Moon,
   ChevronDown,
-  UserCheck,
   CheckCircle2,
   Trash2,
   Clock,
   LogOut,
   User
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import { useNavigate } from 'react-router-dom';
 import logoImg from '../assets/nexxoory_logo.webp';
 import { getInitials } from '../utils/avatar';

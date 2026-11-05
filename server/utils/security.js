@@ -18,7 +18,7 @@ export async function hashPassword(plainPassword) {
 export async function verifyPassword(storedHash, plainPassword) {
   try {
     return await argon2.verify(storedHash, plainPassword);
-  } catch (error) {
+  } catch  {
     return false;
   }
 }

@@ -161,7 +161,8 @@ export class AuthService {
 
       const newAccessToken = signAccessToken(user);
 
-      const { password_hash, avatar_url, ...safeUser } = user;
+      const { avatar_url, ...safeUser } = user;
+      delete safeUser.password_hash;
       safeUser.avatar = avatar_url || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150';
       safeUser.avatar_url = safeUser.avatar;
 

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { User, Moon, Shield, Volume2, Play, CheckCircle2, AlertCircle } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { Moon, Volume2, Play, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useApp } from '../context/useApp';
 import { AuthAPI } from '../services/api';
 import { getInitials } from '../utils/avatar';
 import { SOUND_PROFILES, getSoundPreferences, saveSoundPreferences, playSound } from '../utils/soundEffects';

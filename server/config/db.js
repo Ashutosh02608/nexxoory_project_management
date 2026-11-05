@@ -83,7 +83,7 @@ export function getDbPool() {
 
     pool.on('error', (err) => {
       // Log sanitized error without connection strings, host details, or credentials
-      console.error('[DATABASE POOL ERROR]', err.name, err.message);
+      console.error('[DATABASE POOL ERROR]', err.name, err.code);
     });
   }
 
@@ -105,13 +105,12 @@ export async function query(text, params = []) {
     const duration = Date.now() - start;
     // In dev mode, only log slow queries if query runtime exceeds 5000ms (ignoring serverless cold spin-up latency)
     if (process.env.NODE_ENV === 'development' && duration > 5000) {
-      const preview = text.replace(/\s+/g, ' ').trim().slice(0, 100);
-      console.warn(`[SLOW QUERY DETECTED] Duration: ${duration}ms | Query: "${preview}..."`);
+      console.warn(`[SLOW QUERY DETECTED] Duration: ${duration}ms`);
     }
     return res;
   } catch (error) {
     // Sanitize log output: do not output text or params
-    console.error(`[DATABASE ERROR] ${error.name}: ${error.message}`);
+    console.error('[DATABASE ERROR]', error.name, error.code);
     throw error;
   }
 }
@@ -134,9 +133,7 @@ export async function transaction(callback) {
     try {
       await client.query('ROLLBACK');
     } catch (rollbackError) {
-      console.error(
-        `[CRITICAL ROLLBACK ERROR] Rollback failed: ${rollbackError.message}`
-      );
+      console.error('[CRITICAL ROLLBACK ERROR]', rollbackError.name, rollbackError.code);
     }
     // Always rethrow the original business/database error
     throw originalError;

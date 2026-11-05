@@ -75,7 +75,9 @@ export async function sendOtpEmail(options) {
             <p class="subtitle">Use the verification code below to reset your Nexxoory account password.</p>
           </div>
           <div class="otp-box">
+            <p>Hello ${userName},</p>
             <div class="otp-code">${otpCode}</div>
+            <p>This code expires in ${expiresMinutes} minutes.</p>
             <div class="warning">Valid for 5 minutes only. Do not share this code.</div>
           </div>
           <p style="font-size: 12px; color: #536B82; line-height: 1.6;">
@@ -99,13 +101,13 @@ export async function sendOtpEmail(options) {
       from,
       to: toEmail,
       subject: `Your Password Reset OTP: ${otpCode} - Nexxoory`,
-      text: `Your password reset code is ${otpCode}. Valid for 5 minutes. Do not share this code.`,
+      text: `Hello ${userName}. Your password reset code is ${otpCode}. Valid for ${expiresMinutes} minutes. Do not share this code.`,
       html
     });
-    console.log(`[SMTP SUCCESS] Sent OTP email to ${toEmail}: ${info.messageId}`);
+    console.log('[SMTP SUCCESS] OTP email accepted', info.messageId);
     return { sent: true, messageId: info.messageId };
   } catch (err) {
-    console.error(`[SMTP SEND ERROR] Failed sending to ${toEmail}:`, err);
+    console.error('[SMTP SEND ERROR]', err.name, err.code);
     throw err;
   }
 }

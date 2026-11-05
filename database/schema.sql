@@ -247,6 +247,7 @@ CREATE TABLE IF NOT EXISTS documents (
     file_data BYTEA NOT NULL,
     project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
     author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    assigned_user_ids UUID[] NOT NULL DEFAULT ARRAY[]::UUID[],
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     -- Strict BYTEA payload validation: size_bytes must equal octet_length of file_data
@@ -258,6 +259,16 @@ CREATE INDEX IF NOT EXISTS idx_documents_author ON documents(author_id);
 CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(folder);
 -- Separate metadata index: Never load BYTEA column on list queries
 CREATE INDEX IF NOT EXISTS idx_documents_listing ON documents(id, name, folder, size_bytes, mime_type, project_id, author_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_documents_assigned_users ON documents USING GIN(assigned_user_ids);
+
+CREATE TABLE IF NOT EXISTS folder_permissions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    folder_key VARCHAR(255) NOT NULL,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (folder_key, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_folder_permissions_user_folder ON folder_permissions(user_id, folder_key);
 
 -- =============================================================================
 -- 6. CALENDAR & MILESTONES
@@ -288,6 +299,8 @@ CREATE TABLE IF NOT EXISTS calendar_events (
 
 CREATE INDEX IF NOT EXISTS idx_events_start_date ON calendar_events(start_date);
 CREATE INDEX IF NOT EXISTS idx_events_project ON calendar_events(project_id);
+CREATE INDEX IF NOT EXISTS idx_events_team_start ON calendar_events(team_id, start_date);
+CREATE INDEX IF NOT EXISTS idx_events_department_start ON calendar_events(department, start_date);
 
 -- Calendar Event Attendees (Many-to-Many)
 CREATE TABLE IF NOT EXISTS calendar_event_attendees (

@@ -1,24 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   FolderKanban,
   Search,
-  Filter,
   Plus,
   LayoutGrid,
   List,
   Table as TableIcon,
-  Calendar,
-  CheckCircle2,
-  Clock,
-  MoreVertical,
   Trash2,
   Edit2,
   Eye,
   X,
   Loader2
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import { getInitials } from '../utils/avatar';
 import { ScopeRules } from '../config/rbac';
 
@@ -35,20 +30,24 @@ export default function ProjectsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
   const [detailsProject, setDetailsProject] = useState(null);
+  const submittingRef = useRef(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
 
   // Synchronize URL search params
   useEffect(() => {
-    const statusParam = searchParams.get('status');
-    if (statusParam) {
-      setStatusFilter(statusParam);
-    }
-    const projectIdParam = searchParams.get('projectId');
-    if (projectIdParam && projects.length > 0) {
-      const match = projects.find(p => p.id === projectIdParam);
-      if (match) setDetailsProject(match);
-    }
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      const statusParam = searchParams.get('status');
+      if (statusParam) setStatusFilter(statusParam);
+      const projectIdParam = searchParams.get('projectId');
+      if (projectIdParam && projects.length > 0) {
+        const match = projects.find(p => p.id === projectIdParam);
+        if (match) setDetailsProject(match);
+      }
+    });
+    return () => { active = false; };
   }, [searchParams, projects]);
 
   // Form state
@@ -95,6 +94,8 @@ export default function ProjectsPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setIsSubmitting(true);
     setSubmitError('');
     try {
@@ -112,6 +113,7 @@ export default function ProjectsPage() {
     } catch (err) {
       setSubmitError(err.message || 'Failed to save project');
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -423,6 +425,7 @@ export default function ProjectsPage() {
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
+              {submitError && <p role="alert">{submitError}</p>}
               <div>
                 <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">Project Name</label>
                 <input
